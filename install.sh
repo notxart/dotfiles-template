@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
-# Exit immediately if a command exits with a non-zero status, if an unset
-# variable is used, or if a command in a pipeline fails.
+# Exit immediately if a command exits with a non-zero status.
 set -euo pipefail
 
 # --- Helper Functions ---
@@ -22,8 +21,40 @@ error() {
 
 # Check if a command exists.
 # Usage: command_exists "git"
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+# --- Global Logic: Detect Environment Once ---
+
+# Define global variables for the installation strategy
+PM_STRATEGY=""
+INSTALL_CMD=""
+
+detect_environment() {
+    # Check for Sudo
+    if ! command_exists sudo && ! command_exists brew; then
+        error "sudo command not found. Please install necessary packages manually."
+        exit 1
+    fi
+
+    # Identify Package Manager & set the Installation Strategy
+    if command_exists apt-get; then
+        PM_STRATEGY="apt"
+        INSTALL_CMD="sudo apt install -y"
+    elif command_exists dnf; then
+        PM_STRATEGY="dnf"
+        INSTALL_CMD="sudo dnf install -y"
+    elif command_exists pacman; then
+        PM_STRATEGY="pacman"
+        INSTALL_CMD="sudo pacman -S --noconfirm"
+    elif command_exists brew; then
+        PM_STRATEGY="brew"
+        INSTALL_CMD="brew install"
+    else
+        error "Could not detect a supported package manager."
+        exit 1
+    fi
+
+    log "Detected Package Manager: $PM_STRATEGY"
 }
 
 # --- Main Installation Logic ---
@@ -31,31 +62,49 @@ command_exists() {
 # Install necessary packages, handling different package managers.
 install_packages() {
     log "Installing necessary packages..."
-    # A common set of development and shell enhancement tools.
-    local pkgs="curl fzf gawk git gnupg2 man-db starship vim zoxide"
 
-    if ! command_exists sudo; then
-        error "sudo command not found. Please install the packages manually: $pkgs"
-        return 1
-    fi
+    # A common set of development and shell enhancement tools.
+    local pkgs="curl fzf gawk git gnupg2 man-db vim zoxide"
 
     log "You may be prompted for your password to install packages via sudo."
 
-    if command_exists apt-get; then
-        sudo apt-get update && sudo apt-get install -y build-essential $pkgs
-    elif command_exists dnf; then
-        sudo dnf groupinstall -y "Development Tools"
-        sudo dnf install -y $pkgs
-    elif command_exists pacman; then
-        sudo pacman -Syu --noconfirm --needed base-devel $pkgs
-    elif command_exists brew; then
-        # On macOS, build tools are part of Xcode Command Line Tools, often installed with brew.
-        brew install ${pkgs// / }
-    else
-        error "Could not detect package manager. Please install packages manually: $pkgs"
-        return 1
-    fi
+    # Execute the bootstrap logic based on the detected strategy
+    case "$PM_STRATEGY" in
+        apt)
+            sudo apt update
+            $INSTALL_CMD build-essential $pkgs
+            ;;
+        dnf)
+            sudo dnf groupinstall -y "Development Tools"
+            $INSTALL_CMD $pkgs
+            ;;
+        pacman)
+            # Arch needs -Syu and base-devel
+            sudo pacman -Syu --noconfirm --needed base-devel $pkgs
+            ;;
+        brew)
+            $INSTALL_CMD ${pkgs// / }
+            ;;
+    esac
+
     log "Packages installed successfully."
+}
+
+# Use a fallback strategy when installing Starship.
+install_starship() {
+    log "Checking for Starship..."
+    if command_exists starship; then
+        log "Starship is already installed."
+        return 0
+    fi
+
+    log "Attempting to install Starship via $PM_STRATEGY..."
+
+    # Strategy: Try package manager first. If it fails, fall back to the official install script.
+    if ! $INSTALL_CMD starship 2>/dev/null; then
+        log "Starship package not found in system repositories. Falling back to official installer..."
+        curl -sS https://starship.rs/install.sh | sh -s -- -y
+    fi
 }
 
 # Set up XDG Base Directories to organize config, data, and cache files.
@@ -137,12 +186,7 @@ configure_gpg() {
     mkdir -p "$GPG_HOME"
 
     # Correctly determine the user to chown to, even when run with sudo.
-    local owner
-    if [[ -n "${SUDO_USER-}" ]]; then
-        owner="$SUDO_USER"
-    else
-        owner="$(whoami)"
-    fi
+    local owner="${SUDO_USER:-$(whoami)}"
 
     # Set secure permissions required by GnuPG.
     chown -R "$owner" "$GPG_HOME"
@@ -155,7 +199,9 @@ configure_gpg() {
 main() {
     log "Starting Bash dotfiles setup..."
 
+    detect_environment  # Run once, use everywhere
     install_packages
+    install_starship
     setup_xdg_dirs
     setup_symlinks
     configure_gpg
