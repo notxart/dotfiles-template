@@ -20,7 +20,7 @@ To ensure you can manage your own configurations and sync them across your machi
 
 1. **Create Your Repository**
 
-    Use the "Use this template" button on GitHub (or Fork this repository) to create a copy of this project under your own GitHub account. This detaches your dotfiles from the upstream, allowing you to push changes and maintain your own version.
+    Click the ![Use this template](https://custom-icon-badges.demolab.com/badge/Use_this_template-238636) button on GitHub to generate a new repository from this template. This detaches your dotfiles from the upstream, allowing you to push changes and maintain your own version.
 
 2. **Clone and Install**
 
@@ -44,6 +44,9 @@ To ensure you can manage your own configurations and sync them across your machi
         chmod u+x install.sh
         ./install.sh
         ```
+
+        > [!NOTE]
+        > **Starship Installation**: The script prioritizes installing starship via your system's package manager. If your distribution is older (e.g., Debian 12, Ubuntu 24.04) and does not include Starship in its repositories, the script will automatically fallback to the official Starship installer script. No manual action is required.
 
     The script will:
     1. Install necessary dependencies (starship, fzf, zoxide, etc.) via your system's package manager.
@@ -83,6 +86,7 @@ This template uses a split-config approach for Git to separate personal and work
 1. **Primary Identity**: Edit `config/git/config` in your repo. Change the `[user]` section to your default Git profile.
 2. **Work Identity**: Edit `config/git/work`. This file is conditionally included.
 3. **Activation**: In `config/git/config`, update the path in `[includeIf "gitdir:~/workspace/"]` to match your work projects directory.
+    > [!IMPORTANT]
     > Any git repository inside `~/workspace/` (or your chosen path) will automatically use the configuration defined in `config/git/work`.
 
 ### WSL integration

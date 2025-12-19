@@ -43,6 +43,9 @@ if [[ -f "$BLESH_INSTALLED_PATH" ]]; then
 
     # --- ble.sh Settings ---
 
+    # Set Color Scheme (Matches Starship palette)
+    bleopt color_scheme=catppuccin_mocha
+
     # Disable bell sound
     bleopt edit_bell:=
 
