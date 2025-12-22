@@ -16,4 +16,4 @@ export GNUPGHOME="${XDG_DATA_HOME}/gnupg"
 export GPG_TTY=$(tty)
 
 # Tell Git to use our XDG-compliant config file
-export GIT_CONFIG_GLOBAL="${XDG_CONFIG_HOME}/git/config"
+export GIT_CONFIG_GLOBAL="${XDG_CONFIG_HOME}/git/config.ini"

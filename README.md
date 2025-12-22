@@ -82,12 +82,12 @@ Then, run `./install.sh` again to ensure symlinks are correct (though for `rc.d`
 
 This template uses a split-config approach for Git to separate personal and work identities.
 
-1. **Primary Identity**: Edit `config/git/config` in your repo. Change the `[user]` section to your default Git profile.
-2. **Work Identity**: Edit `config/git/work`. This file is conditionally included.
-3. **Activation**: In `config/git/config`, update the path in `[includeIf "gitdir:~/workspace/"]` to match your work projects directory.
+1. **Primary Identity**: Edit `config/git/config.ini` in your repo. Change the `[user]` section to your default Git profile.
+2. **Work Identity**: Edit `config/git/work.ini`. This file is conditionally included.
+3. **Activation**: In `config/git/config.ini`, update the path in `[includeIf "gitdir:~/workspace/"]` to match your work projects directory.
 
 > [!IMPORTANT]
-> Any git repository inside `~/workspace/` (or your chosen path) will automatically use the configuration defined in `config/git/work`.
+> Any git repository inside `~/workspace/` (or your chosen path) will automatically use the configuration defined in `config/git/work.ini`.
 
 ### WSL integration
 
