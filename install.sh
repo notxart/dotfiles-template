@@ -23,6 +23,19 @@ error() {
 # Usage: command_exists "git"
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+# Compare package version
+# Usage: compare_version "ver1" "ver2"
+compare_version() {
+    local v1=$1
+    local v2=$2
+    local tmpv="$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)"
+    if [ "$tmpv" = "$v1" ] && [ "$tmpv" != "$v2" ]; then
+        return 0
+    else
+        return 1  # v1 > v2
+    fi
+}
+
 # --- Global Logic: Detect Environment Once ---
 
 # Define global variables for the installation strategy
@@ -195,6 +208,57 @@ configure_gpg() {
     log "GnuPG home set to $GPG_HOME with correct permissions for user '$owner'."
 }
 
+# If the fzf package that agent using is outated then update the fzf version
+update_fzf() {
+    local version=""
+    local required_version="0.60"
+
+    if ! command_exists fzf; then
+        log "Package fzf had not been founded, installing fzf..."
+    else
+        # get current fzf version
+        version=$(fzf --version | cut -d ' ' -f1)
+        log "fzf founded version: $version"
+    fi
+    
+    if [ -z "$version" ] || compare_version "$version" "$required_version"; then
+        # install fzf
+        log "Updating fzf from source..."
+        local DOTFILES_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+        local FZF_DIR="$DOTFILES_DIR/config/fzf"
+        [ -d "$FZF_DIR" ] && rm -rf "$FZF_DIR"
+        if git clone --depth 1 https://github.com/junegunn/fzf.git "$FZF_DIR"; then
+            "$FZF_DIR/install" --all
+            log "Package fzf update successfully"
+        else
+            error "Failed to install fzf"
+            rm -rf "$FZF_DIR"
+            exit 1
+        fi
+
+        # Remove old fzf package
+        if [ -n "$version" ]; then
+            log "Removing old fzf version..."
+            case "$PM_STRATEGY" in
+                apt)
+                    sudo apt purge -y fzf 2>/dev/null || true
+                    sudo apt autoremove -y
+                    ;;
+                dnf)
+                    sudo dnf remove -y fzf 2>/dev/null || true
+                    ;;
+                pacman)
+                    sudo pacman -R --noconfirm fzf 2>/dev/null || true
+                    ;;
+                brew)
+                    brew uninstall fzf 2>/dev/null || true
+                    ;;
+            esac
+            log "Removing old fzf version successfully"
+        fi
+    fi
+}
+
 # Main function to orchestrate the entire setup process.
 main() {
     log "Starting Bash dotfiles setup..."
@@ -205,6 +269,7 @@ main() {
     setup_xdg_dirs
     setup_symlinks
     configure_gpg
+    update_fzf
 
     log "Setup complete! Please restart your shell or run 'source ~/.bashrc' to apply changes."
 }
