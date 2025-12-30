@@ -218,43 +218,30 @@ update_fzf() {
     else
         # get current fzf version
         version=$(fzf --version | cut -d ' ' -f1)
-        log "fzf founded version: $version"
+        log "fzf found version: $version"
     fi
     
     if [ -z "$version" ] || compare_version "$version" "$required_version"; then
-        # install fzf
         log "Updating fzf from source..."
-        local DOTFILES_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-        local FZF_DIR="$DOTFILES_DIR/config/fzf"
+        local FZF_DIR="$XDG_DATA_HOME/fzf"
         [ -d "$FZF_DIR" ] && rm -rf "$FZF_DIR"
         if git clone --depth 1 https://github.com/junegunn/fzf.git "$FZF_DIR"; then
-            "$FZF_DIR/install" --all
+            # install fzf
+            "$FZF_DIR/install" --bin
             log "Package fzf update successfully"
+
+            # create symlink
+            local src="$FZF_DIR/bin/fzf"
+            local dest="$HOME/.local/bin/fzf"
+            mkdir -p "$(dirname "$dest")"
+            log "Creating symlink: $src -> $XDG_CONFIG_HOME/fzf"
+            ln -s "$src" "$dest"
+            log "Symlink created successfully."
         else
             error "Failed to install fzf"
             rm -rf "$FZF_DIR"
+            rm -rf "$dest"
             exit 1
-        fi
-
-        # Remove old fzf package
-        if [ -n "$version" ]; then
-            log "Removing old fzf version..."
-            case "$PM_STRATEGY" in
-                apt)
-                    sudo apt purge -y fzf 2>/dev/null || true
-                    sudo apt autoremove -y
-                    ;;
-                dnf)
-                    sudo dnf remove -y fzf 2>/dev/null || true
-                    ;;
-                pacman)
-                    sudo pacman -R --noconfirm fzf 2>/dev/null || true
-                    ;;
-                brew)
-                    brew uninstall fzf 2>/dev/null || true
-                    ;;
-            esac
-            log "Removing old fzf version successfully"
         fi
     fi
 }
@@ -267,9 +254,9 @@ main() {
     install_packages
     install_starship
     setup_xdg_dirs
+    update_fzf
     setup_symlinks
     configure_gpg
-    update_fzf
 
     log "Setup complete! Please restart your shell or run 'source ~/.bashrc' to apply changes."
 }
