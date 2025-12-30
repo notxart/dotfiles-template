@@ -23,6 +23,19 @@ error() {
 # Usage: command_exists "git"
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+# Compare package version
+# Usage: compare_version "ver1" "ver2"
+compare_version() {
+    local v1=$1
+    local v2=$2
+    local tmpv="$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)"
+    if [ "$tmpv" = "$v1" ] && [ "$tmpv" != "$v2" ]; then
+        return 0
+    else
+        return 1  # v1 > v2
+    fi
+}
+
 # --- Global Logic: Detect Environment Once ---
 
 # Define global variables for the installation strategy
@@ -195,6 +208,44 @@ configure_gpg() {
     log "GnuPG home set to $GPG_HOME with correct permissions for user '$owner'."
 }
 
+# If the fzf package that agent using is outated then update the fzf version
+update_fzf() {
+    local version=""
+    local required_version="0.60"
+
+    if ! command_exists fzf; then
+        log "Package fzf had not been founded, installing fzf..."
+    else
+        # get current fzf version
+        version=$(fzf --version | cut -d ' ' -f1)
+        log "fzf found version: $version"
+    fi
+    
+    if [ -z "$version" ] || compare_version "$version" "$required_version"; then
+        log "Updating fzf from source..."
+        local FZF_DIR="$XDG_DATA_HOME/fzf"
+        [ -d "$FZF_DIR" ] && rm -rf "$FZF_DIR"
+        if git clone --depth 1 https://github.com/junegunn/fzf.git "$FZF_DIR"; then
+            # install fzf
+            "$FZF_DIR/install" --bin
+            log "Package fzf update successfully"
+
+            # create symlink
+            local src="$FZF_DIR/bin/fzf"
+            local dest="$HOME/.local/bin/fzf"
+            mkdir -p "$(dirname "$dest")"
+            log "Creating symlink: $src -> $XDG_CONFIG_HOME/fzf"
+            ln -s "$src" "$dest"
+            log "Symlink created successfully."
+        else
+            error "Failed to install fzf"
+            rm -rf "$FZF_DIR"
+            rm -rf "$dest"
+            exit 1
+        fi
+    fi
+}
+
 # Main function to orchestrate the entire setup process.
 main() {
     log "Starting Bash dotfiles setup..."
@@ -203,6 +254,7 @@ main() {
     install_packages
     install_starship
     setup_xdg_dirs
+    update_fzf
     setup_symlinks
     configure_gpg
 
