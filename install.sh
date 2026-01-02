@@ -1,9 +1,34 @@
 #!/usr/bin/env bash
 
+# ==============================================================================
+# Dotfiles Installation Script
+#
+# Description:
+#   Sets up the Bash environment, installs dependencies, and configures symlinks
+#   compliant with the XDG Base Directory Specification.
+#
+# Author: Traxton Chen (Refactored)
+# ==============================================================================
+
 # Exit immediately if a command exits with a non-zero status.
+# Treat unset variables as an error.
 set -euo pipefail
 
-# --- Helper Functions ---
+# ==============================================================================
+# Global Configuration & Constants
+# ==============================================================================
+
+# Global variables for Package Manager Strategy.
+# These will be populated by 'detect_environment'.
+PM_STRATEGY=""
+UPDATE_CMD=""
+INSTALL_CMD=""
+BUILD_PKGS=()
+SORT_CMD="sort"
+
+# ==============================================================================
+# Utility Functions (Logging & Basic Checks)
+# ==============================================================================
 
 # Print a message in a consistent, colorful format.
 # Usage: log "This is a message."
@@ -19,137 +44,333 @@ error() {
     echo -e "\n\033[1;31mError: $1\033[0m" >&2
 }
 
-# Check if a command exists.
+# Check if a command is available in the PATH.
 # Usage: command_exists "git"
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-# Compare package version
-# Usage: compare_version "ver1" "ver2"
-compare_version() {
-    local v1=$1
-    local v2=$2
-    local tmpv="$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)"
-    if [ "$tmpv" = "$v1" ] && [ "$tmpv" != "$v2" ]; then
-        return 0
+# ==============================================================================
+# Version Control Logic
+# ==============================================================================
+
+# Initialize the sort command based on system capabilities.
+# macOS 'sort' does not support -V, so we rely on 'gsort' from coreutils.
+init_version_sorter() {
+    # Check if default sort supports version sort
+    if sort --version-sort </dev/null >/dev/null 2>&1; then
+        SORT_CMD="sort"
+    elif command_exists gsort; then
+        SORT_CMD="gsort"
     else
-        return 1  # v1 > v2
+        # Fallback warning, though install_packages should handle this for macOS
+        if [[ "$PM_STRATEGY" == "brew" ]]; then
+            log "Warning: GNU sort not found. 'coreutils' will be installed to ensure correct versioning."
+        fi
+        SORT_CMD="sort"
     fi
 }
 
-# --- Global Logic: Detect Environment Once ---
+# Compare two semantic versions.
+# Usage: compare_versions_lt "curr_ver" "req_ver"
+# Returns 0 (true) if current < required (update needed).
+# Returns 1 (false) if current >= required (sufficient).
+compare_versions_lt() {
+    local v1="$1"
+    local v2="$2"
 
-# Define global variables for the installation strategy
-PM_STRATEGY=""
-INSTALL_CMD=""
+    # Treat empty v1 as the lowest possible version (needs update)
+    [[ -z "$v1" ]] && return 0
 
-detect_environment() {
-    # Check for Sudo
-    if ! command_exists sudo && ! command_exists brew; then
-        error "sudo command not found. Please install necessary packages manually."
-        exit 1
-    fi
+    # If versions are identical, strictly not less than.
+    [[ "$v1" == "$v2" ]] && return 1
 
-    # Identify Package Manager & set the Installation Strategy
-    if command_exists apt-get; then
-        PM_STRATEGY="apt"
-        INSTALL_CMD="sudo apt install -y"
-    elif command_exists dnf; then
-        PM_STRATEGY="dnf"
-        INSTALL_CMD="sudo dnf install -y"
-    elif command_exists pacman; then
-        PM_STRATEGY="pacman"
-        INSTALL_CMD="sudo pacman -S --noconfirm"
-    elif command_exists brew; then
-        PM_STRATEGY="brew"
-        INSTALL_CMD="brew install"
-    else
-        error "Could not detect a supported package manager."
-        exit 1
-    fi
+    # Sort versions using sort -V (version sort) and pick the top one.
+    # If the smallest of the two is v1, then v1 < v2.
+    local smallest
+    smallest=$(printf '%s\n%s\n' "$v1" "$v2" | $SORT_CMD -V | head -n1)
 
-    log "Detected Package Manager: $PM_STRATEGY"
+    [[ "$smallest" == "$v1" ]]
 }
 
-# --- Main Installation Logic ---
+# Extract the version string from an installed command.
+# Heuristics are used to parse different output formats from various tools.
+get_installed_version() {
+    local cmd="$1"
 
-# Install necessary packages, handling different package managers.
-install_packages() {
-    log "Installing necessary packages..."
+    # Priority check: Check local bin first to avoid detecting system binary if shadowed
+    local local_bin="$HOME/.local/bin/$cmd"
+    local target_cmd="$cmd"
 
-    # A common set of development and shell enhancement tools.
-    local pkgs="curl fzf gawk git gnupg2 man-db vim zoxide"
+    if [[ -x "$local_bin" ]]; then
+        target_cmd="$local_bin"
+    elif ! command_exists "$cmd"; then
+        return 1
+    fi
 
-    log "You may be prompted for your password to install packages via sudo."
+    # Retrieve version output once
+    local output
+    output=$(LC_ALL=C "$target_cmd" --version 2>&1 | head -n1)
 
-    # Execute the bootstrap logic based on the detected strategy
+    case "$cmd" in
+        starship)
+            # Format: "starship 1.22.1" -> "1.22.1"
+            awk '{print $2}' <<< "$output"
+            ;;
+        fzf)
+            # Format: "0.60 (devel)" -> "0.60"
+            awk '{print $1}' <<< "$output"
+            ;;
+        *)
+            # Fallback: Grab the last word (e.g., "git version 2.34.1" -> "2.34.1")
+            awk '{print $NF}' <<< "$output"
+            ;;
+    esac
+}
+
+# Specific parsing logic for fetching version from remote repositories.
+# Note: This is brittle and depends on the specific output format of PMs.
+get_candidate_version() {
+    local pkg="$1"
+    local version=""
+
     case "$PM_STRATEGY" in
         apt)
-            sudo apt update
-            $INSTALL_CMD build-essential $pkgs
+            # Parse 'apt-cache policy' for Candidate version
+            version=$(LC_ALL=C apt-cache policy "$pkg" 2>/dev/null | grep 'Candidate:' | awk '{print $2}' | cut -d- -f1)
             ;;
         dnf)
-            sudo dnf groupinstall -y "Development Tools"
-            $INSTALL_CMD $pkgs
+            # Parse 'dnf info' for Version
+            version=$(LC_ALL=C dnf info --available "$pkg" 2>/dev/null | grep '^Version' | head -n1 | awk '{print $3}' | cut -d: -f2)
             ;;
         pacman)
-            # Arch needs -Syu and base-devel
-            sudo pacman -Syu --noconfirm --needed base-devel $pkgs
+            # Parse 'pacman -Si' for Version
+            version=$(LC_ALL=C pacman -Si "$pkg" 2>/dev/null | grep '^Version' | awk '{print $3}' | cut -d- -f1)
             ;;
         brew)
-            $INSTALL_CMD ${pkgs// / }
+            # Parse 'brew info'
+            version=$(LC_ALL=C brew info "$pkg" 2>/dev/null | head -n1 | awk '{print $4}')
             ;;
     esac
 
-    log "Packages installed successfully."
+    # Trim whitespace
+    echo "$version" | xargs
 }
 
-# Use a fallback strategy when installing Starship.
-install_starship() {
-    log "Checking for Starship..."
-    if command_exists starship; then
-        log "Starship is already installed."
-        return 0
+# ==============================================================================
+# Environment Detection
+# ==============================================================================
+
+detect_environment() {
+    # Pre-flight check for sudo/root capabilities
+    if ! command_exists sudo && ! command_exists brew; then
+        error "Administrator privileges (sudo) or Homebrew are required."
+        exit 1
     fi
 
-    log "Attempting to install Starship via $PM_STRATEGY..."
+    # Refresh sudo privileges upfront to prevent timeouts during long installs
+    if command_exists sudo; then
+        sudo -v
+    fi
 
-    # Strategy: Try package manager first. If it fails, fall back to the official install script.
-    if ! $INSTALL_CMD starship 2>/dev/null; then
-        log "Starship package not found in system repositories. Falling back to official installer..."
-        curl -sS https://starship.rs/install.sh | sh -s -- -y
+    # Detect Package Manager and configure commands
+    if command_exists apt-get; then
+        PM_STRATEGY="apt"
+        UPDATE_CMD="sudo apt-get update"
+        INSTALL_CMD="sudo apt-get install -y"
+        BUILD_PKGS=("build-essential")
+
+    elif command_exists dnf; then
+        PM_STRATEGY="dnf"
+        UPDATE_CMD="sudo dnf makecache"
+        INSTALL_CMD="sudo dnf install -y"
+        BUILD_PKGS=("@development-tools")
+
+    elif command_exists pacman; then
+        PM_STRATEGY="pacman"
+        UPDATE_CMD="sudo pacman -Sy"
+        INSTALL_CMD="sudo pacman -S --noconfirm --needed"
+        BUILD_PKGS=("base-devel")
+
+    elif command_exists brew; then
+        PM_STRATEGY="brew"
+        UPDATE_CMD="brew update"
+        INSTALL_CMD="brew install"
+        # Homebrew needs coreutils for 'gsort' (GNU sort) to support version sorting
+        BUILD_PKGS=("coreutils")
+
+    else
+        error "Unsupported OS. Could not detect apt, dnf, pacman, or brew."
+        exit 1
+    fi
+
+    log "Environment Detected: $PM_STRATEGY"
+}
+
+# ==============================================================================
+# Installation Logic
+# ==============================================================================
+
+## Base Package Installation
+install_packages() {
+    log "Installing base packages..."
+
+    # Common utilities list.
+    # Note: 'fzf' and 'starship' are handled separately via verify_and_install_tool.
+    local pkgs=(curl gawk git gnupg2 man-db vim zoxide)
+
+    # Append build tools if required by the distro
+    if [ ${#BUILD_PKGS[@]} -gt 0 ]; then
+        pkgs+=("${BUILD_PKGS[@]}")
+    fi
+
+    log "Updating repositories..."
+    $UPDATE_CMD
+
+    log "Installing: ${pkgs[*]}"
+    $INSTALL_CMD "${pkgs[@]}"
+
+    # Re-evaluate sort command after installation (specifically for macOS/coreutils)
+    init_version_sorter
+
+    log "Base packages installed."
+}
+
+## Specific Install Callbacks (Fallback Strategies)
+# These functions are called only when the system package manager fails to provide a sufficient version of the tool.
+
+install_fzf_manual() {
+    log "Fallback: Installing fzf from source..."
+
+    local fzf_dir="$XDG_DATA_HOME/fzf"
+    local bin_dest="$HOME/.local/bin/fzf"
+
+    # Clean previous attempts
+    [ -d "$fzf_dir" ] && rm -rf "$fzf_dir"
+
+    if git clone --depth 1 https://github.com/junegunn/fzf.git "$fzf_dir"; then
+        # Run installer, generate binary only
+        "$fzf_dir/install" --bin
+
+        # Symlink to local bin
+        mkdir -p "$(dirname "$bin_dest")"
+        ln -sf "$fzf_dir/bin/fzf" "$bin_dest"
+
+        log "fzf installed manually to $bin_dest"
+    else
+        error "Failed to clone fzf repository."
+        exit 1
     fi
 }
+
+install_starship_manual() {
+    log "Fallback: Installing Starship via official script..."
+
+    # Try default install (usually /usr/local/bin, requires sudo)
+    if ! curl -sS https://starship.rs/install.sh | sh -s -- -y; then
+        log "System-wide install failed. Attempting local install to ~/.local/bin..."
+        curl -sS https://starship.rs/install.sh | sh -s -- -y -b "$HOME/.local/bin"
+    fi
+}
+
+## Strategy Validator
+# Checks if a tool meets version requirements. Priorities:
+# 1. Current Local Version (if sufficient, skip)
+# 2. Package Manager Version (if sufficient, install)
+# 3. Manual Installation (Callback function)
+#
+# Arguments:
+#   $1: cmd_name (e.g., "fzf")
+#   $2: pkg_name (e.g., "fzf")
+#   $3: req_ver  (e.g., "0.60")
+#   $4: callback (Function name to call if PM fails)
+verify_and_install_tool() {
+    local cmd="$1"
+    local pkg="$2"
+    local req_ver="$3"
+    local callback="$4"
+    local current_ver=""
+    local candidate_ver=""
+
+    log "Checking Requirement: $cmd >= $req_ver"
+
+    # Step 1: Check if currently installed version is sufficient
+    if command_exists "$cmd"; then
+        current_ver=$(get_installed_version "$cmd")
+        if ! compare_versions_lt "$current_ver" "$req_ver"; then
+            log "✓ Local $cmd version ($current_ver) is sufficient."
+            return 0
+        fi
+        log "⚠ Local $cmd version ($current_ver) is outdated."
+    fi
+
+    # Step 2: Check Package Manager Candidate
+    log "Checking repository candidate for '$pkg'..."
+    candidate_ver=$(get_candidate_version "$pkg")
+
+    # If candidate exists AND is >= required version
+    if [[ -n "$candidate_ver" ]] && ! compare_versions_lt "$candidate_ver" "$req_ver"; then
+        log "✓ Repository version ($candidate_ver) is sufficient. Installing via $PM_STRATEGY..."
+        $INSTALL_CMD "$pkg"
+
+        # Verification Post-Install
+        current_ver=$(get_installed_version "$cmd")
+        if compare_versions_lt "$current_ver" "$req_ver"; then
+            error "Package manager installed $current_ver, which is still too old. Proceeding to fallback."
+            # Fallthrough to callback if PM failed to deliver promises
+        else
+            return 0
+        fi
+    else
+        log "⚠ Repository version (${candidate_ver:-not found}) is insufficient."
+    fi
+
+    # Step 3: Fallback to Manual Installation
+    log "Proceeding with manual installation strategy ($callback)..."
+    eval "$callback"
+}
+
+# ==============================================================================
+# Configuration & Dotfiles Linking
+# ==============================================================================
 
 # Set up XDG Base Directories to organize config, data, and cache files.
 # Ref: https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
 setup_xdg_dirs() {
-    log "Setting up XDG base directories..."
+    log "Configuring XDG Base Directories..."
     export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
     export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
     export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
     export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 
-    mkdir -p "$XDG_CONFIG_HOME"
-    mkdir -p "$XDG_CACHE_HOME"
-    mkdir -p "$XDG_DATA_HOME"
-    mkdir -p "$XDG_STATE_HOME"
-    mkdir -p "$HOME/.local/bin" # Standard location for user-specific binaries
-    log "XDG directories are ready."
+    mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+    mkdir -p "$HOME/.local/bin"
+
+    log "XDG directories ready."
+}
+
+# Configure GnuPG permissions strictly as required by the tool.
+configure_gpg() {
+    log "Configuring GnuPG..."
+    local gpg_home="$XDG_DATA_HOME/gnupg"
+    local owner="${SUDO_USER:-$(whoami)}"
+
+    mkdir -p "$gpg_home"
+    chown -R "$owner" "$gpg_home"
+    chmod 700 "$gpg_home"
+
+    log "GnuPG permissions secured."
 }
 
 # Create symbolic links for dotfiles, backing up any existing configurations.
 setup_symlinks() {
-    log "Setting up symlinks..."
-    # Get the absolute path of the directory where this script is located.
-    # This makes the script runnable from anywhere.
-    local DOTFILES_DIR
-    DOTFILES_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+    log "Synchronizing Dotfiles..."
 
-    local BACKUP_DIR="$HOME/.dotfiles_backup_$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$BACKUP_DIR"
-    log "Backups of existing files will be stored in $BACKUP_DIR"
+    local dotfiles_dir
+    dotfiles_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-    # Define files and directories to symlink in "source:destination" format.
+    local backup_dir="$HOME/.dotfiles_backup_$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$backup_dir"
+
+    # "Source_Rel_Path:Dest_Abs_Path"
     local links=(
         ".bash_profile:$HOME/.bash_profile"
         ".bashrc:$HOME/.bashrc"
@@ -161,105 +382,54 @@ setup_symlinks() {
     for link in "${links[@]}"; do
         local src="${link%%:*}"
         local dest="${link#*:}"
+        local full_src="$dotfiles_dir/$src"
 
-        # Resolve full paths
-        local full_src="$DOTFILES_DIR/$src"
-        local full_dest="$dest"
+        # Ensure parent dir exists
+        mkdir -p "$(dirname "$dest")"
 
-        # Ensure the parent directory of the destination exists.
-        mkdir -p "$(dirname "$full_dest")"
-
-        # If destination exists and is a regular file/dir (not a symlink), back it up.
-        if [ -e "$full_dest" ] && [ ! -L "$full_dest" ]; then
-            log "Backing up existing file/directory: $full_dest"
-            mv "$full_dest" "$BACKUP_DIR/"
+        # Backup Logic:
+        # 1. If dest exists and is NOT a symlink -> Backup
+        # 2. If dest is a directory (even if empty) and not a symlink -> Backup
+        if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+            log "Backing up existing: $dest"
+            mv "$dest" "$backup_dir/"
         fi
 
-        # If the destination is a broken symlink, remove it.
-        if [ -L "$full_dest" ] && [ ! -e "$full_dest" ]; then
-            log "Removing broken symlink: $full_dest"
-            rm "$full_dest"
+        # Link Creation
+        # ln -sf will force overwrite if it's a file or symlink.
+        # But if dest is a directory, 'ln -sf src dest' creates 'dest/src', which is wrong.
+        # The backup logic above should handle the directory case, but we double check.
+        if [ -d "$dest" ] && [ ! -L "$dest" ]; then
+             error "Destination $dest is a directory and failed to backup. Skipping."
+             continue
         fi
 
-        # Create symlink if it doesn't already exist.
-        if [ ! -e "$full_dest" ]; then
-            log "Creating symlink: $full_dest -> $full_src"
-            ln -s "$full_src" "$full_dest"
-        else
-            log "Symlink already exists: $full_dest"
-        fi
+        log "Linking: $dest -> $src"
+        ln -sf "$full_src" "$dest"
     done
-    log "Symlinks created successfully."
 }
 
-# Configure GnuPG to use the XDG data directory.
-configure_gpg() {
-    log "Configuring GnuPG..."
-    local GPG_HOME="$XDG_DATA_HOME/gnupg"
-    mkdir -p "$GPG_HOME"
+# ==============================================================================
+# Main Execution Flow
+# ==============================================================================
 
-    # Correctly determine the user to chown to, even when run with sudo.
-    local owner="${SUDO_USER:-$(whoami)}"
-
-    # Set secure permissions required by GnuPG.
-    chown -R "$owner" "$GPG_HOME"
-    chmod 700 "$GPG_HOME"
-
-    log "GnuPG home set to $GPG_HOME with correct permissions for user '$owner'."
-}
-
-# If the fzf package that agent using is outated then update the fzf version
-update_fzf() {
-    local version=""
-    local required_version="0.60"
-
-    if ! command_exists fzf; then
-        log "Package fzf had not been founded, installing fzf..."
-    else
-        # get current fzf version
-        version=$(fzf --version | cut -d ' ' -f1)
-        log "fzf found version: $version"
-    fi
-    
-    if [ -z "$version" ] || compare_version "$version" "$required_version"; then
-        log "Updating fzf from source..."
-        local FZF_DIR="$XDG_DATA_HOME/fzf"
-        [ -d "$FZF_DIR" ] && rm -rf "$FZF_DIR"
-        if git clone --depth 1 https://github.com/junegunn/fzf.git "$FZF_DIR"; then
-            # install fzf
-            "$FZF_DIR/install" --bin
-            log "Package fzf update successfully"
-
-            # create symlink
-            local src="$FZF_DIR/bin/fzf"
-            local dest="$HOME/.local/bin/fzf"
-            mkdir -p "$(dirname "$dest")"
-            log "Creating symlink: $src -> $XDG_CONFIG_HOME/fzf"
-            ln -s "$src" "$dest"
-            log "Symlink created successfully."
-        else
-            error "Failed to install fzf"
-            rm -rf "$FZF_DIR"
-            rm -rf "$dest"
-            exit 1
-        fi
-    fi
-}
-
-# Main function to orchestrate the entire setup process.
 main() {
-    log "Starting Bash dotfiles setup..."
+    log "Starting Dotfiles Setup ❮❮❮"
 
-    detect_environment  # Run once, use everywhere
-    install_packages
-    install_starship
+    detect_environment
     setup_xdg_dirs
-    update_fzf
+    install_packages
+
+    # Install/Update smart tools with version enforcement
+    # Arguments: verify_and_install_tool <cmd> <package> <min_version> <fallback_func>
+    verify_and_install_tool "fzf" "fzf" "0.60" "install_fzf_manual"
+    verify_and_install_tool "starship" "starship" "1.20.0" "install_starship_manual"
+
     setup_symlinks
     configure_gpg
 
-    log "Setup complete! Please restart your shell or run 'source ~/.bashrc' to apply changes."
+    log "Setup Complete! ❮❮❮"
+    log "Please restart your shell or run 'source ~/.bashrc' to apply changes."
 }
 
-# Execute the main function to start the script.
 main
