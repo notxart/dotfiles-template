@@ -1,5 +1,9 @@
 # Configuration and installation for ble.sh (Bash Line Editor).
 
+# --- Environment Check ---
+# Disable ble.sh in VSCode to prevent multiline hanging issues.
+[[ "$TERM_PROGRAM" == *vscode* ]] && return 0
+
 # --- Installation ---
 BLESH_DIR="$XDG_DATA_HOME/blesh"
 BLESH_INSTALLED_PATH="$BLESH_DIR/ble.sh"
