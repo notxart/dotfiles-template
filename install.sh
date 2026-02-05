@@ -217,7 +217,7 @@ install_packages() {
 
     # Common utilities list.
     # Note: 'fzf' and 'starship' are handled separately via verify_and_install_tool.
-    local pkgs=(curl gawk git gnupg2 man-db vim zoxide)
+    local pkgs=(curl gawk git gnupg2 man-db ripgrep vim zoxide)
 
     # Append distro-specific packages
     if [ ${#DISTRO_PKGS[@]} -gt 0 ]; then
