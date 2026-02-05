@@ -23,8 +23,10 @@ set -euo pipefail
 PM_STRATEGY=""
 UPDATE_CMD=""
 INSTALL_CMD=""
-BUILD_PKGS=()
 SORT_CMD="sort"
+
+# Distro-specific packages (e.g., build tools, platform-specific naming variations)
+DISTRO_PKGS=()
 
 # ==============================================================================
 # Utility Functions (Logging & Basic Checks)
@@ -176,26 +178,26 @@ detect_environment() {
         PM_STRATEGY="apt"
         UPDATE_CMD="sudo apt-get update"
         INSTALL_CMD="sudo apt-get install -y"
-        BUILD_PKGS=("build-essential")
+        DISTRO_PKGS=("build-essential" "fd-find")
 
     elif command_exists dnf; then
         PM_STRATEGY="dnf"
         UPDATE_CMD="sudo dnf makecache"
         INSTALL_CMD="sudo dnf install -y"
-        BUILD_PKGS=("@development-tools")
+        DISTRO_PKGS=("@development-tools" "fd-find")
 
     elif command_exists pacman; then
         PM_STRATEGY="pacman"
         UPDATE_CMD="sudo pacman -Sy"
         INSTALL_CMD="sudo pacman -S --noconfirm --needed"
-        BUILD_PKGS=("base-devel")
+        DISTRO_PKGS=("base-devel" "fd")
 
     elif command_exists brew; then
         PM_STRATEGY="brew"
         UPDATE_CMD="brew update"
         INSTALL_CMD="brew install"
         # Homebrew needs coreutils for 'gsort' (GNU sort) to support version sorting
-        BUILD_PKGS=("coreutils")
+        DISTRO_PKGS=("coreutils" "fd")
 
     else
         error "Unsupported OS. Could not detect apt, dnf, pacman, or brew."
@@ -217,9 +219,9 @@ install_packages() {
     # Note: 'fzf' and 'starship' are handled separately via verify_and_install_tool.
     local pkgs=(curl gawk git gnupg2 man-db vim zoxide)
 
-    # Append build tools if required by the distro
-    if [ ${#BUILD_PKGS[@]} -gt 0 ]; then
-        pkgs+=("${BUILD_PKGS[@]}")
+    # Append distro-specific packages
+    if [ ${#DISTRO_PKGS[@]} -gt 0 ]; then
+        pkgs+=("${DISTRO_PKGS[@]}")
     fi
 
     log "Updating repositories..."
@@ -360,6 +362,15 @@ configure_gpg() {
     log "GnuPG permissions secured."
 }
 
+# Ensure fd is available as 'fd' even on systems that name it 'fdfind' (Debian/Ubuntu)
+configure_fd_alias() {
+    # If 'fdfind' exists (installed by apt) but 'fd' does not
+    if command_exists fdfind && ! command_exists fd; then
+        log "Mapping 'fdfind' to 'fd' in ~/.local/bin..."
+        ln -sf "$(command -v fdfind)" "$HOME/.local/bin/fd"
+    fi
+}
+
 # Create symbolic links for dotfiles, backing up any existing configurations.
 setup_symlinks() {
     log "Synchronizing Dotfiles..."
@@ -424,6 +435,9 @@ main() {
     # Arguments: verify_and_install_tool <cmd> <package> <min_version> <fallback_func>
     verify_and_install_tool "fzf" "fzf" "0.60" "install_fzf_manual"
     verify_and_install_tool "starship" "starship" "1.20.0" "install_starship_manual"
+
+    # Post-installation configurations
+    configure_fd_alias
 
     setup_symlinks
     configure_gpg
