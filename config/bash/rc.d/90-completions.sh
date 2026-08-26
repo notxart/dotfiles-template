@@ -46,6 +46,9 @@ generate_completion_if_missing() {
 
 # --- Static Completions (Generated Once) ---
 
+# pnpm (Node.js-free standalone install; see install.sh)
+generate_completion_if_missing "pnpm" "pnpm completion bash"
+
 # Example: Rust Toolchain
 generate_completion_if_missing "rustup" "rustup completions bash"
 generate_completion_if_missing "cargo" "rustup completions bash cargo"
