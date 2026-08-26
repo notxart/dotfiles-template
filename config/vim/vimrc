@@ -1,0 +1,33 @@
+" =============================================
+" Minimal Vim Config
+" Path: ~/.config/vim/vimrc (symlinked from config/vim; Vim >= 9.0
+"       loads this XDG path natively when ~/.vimrc does not exist)
+" Purpose: deterministic commit-message wrapping at 72 columns.
+" Git sets the filetype to 'gitcommit' when editing commit messages
+" (including prepare-commit-msg injected drafts), so this applies ONLY
+" to commit messages — all other files are unaffected.
+" =============================================
+
+" Wrap commit message lines at 72 columns while typing
+autocmd FileType gitcommit setlocal textwidth=72
+
+" Visually mark the 73rd column (the wrap limit + 1) in commit messages
+autocmd FileType gitcommit setlocal colorcolumn=73
+
+" Rewrap long commit-message lines deterministically ON SAVE.
+" textwidth only wraps text that is being typed — lines written by an AI
+" draft (agent-authored, injected via the prepare-commit-msg hook) are NOT
+" rewrapped by Vim on their own, so fix them here.
+" Two separate defs (a pipe inside an :autocmd definition would truncate it):
+" first trims trailing whitespace, second rewraps. Only non-comment (#) lines
+" are filtered: git's template hint lines and the `git commit -v` diff listing
+" stay untouched. `fold -s -w 72` breaks at word boundaries one line at a
+" time, preserving bullet/paragraph structure — a `gq` paragraph join would
+" merge list items into prose. Idempotent: already-wrapped lines pass through
+" unchanged. Requires the BSD/GNU `fold` utility (present on macOS and all
+" supported Linux distros). Note: `fold -w` counts BYTES (not display
+" columns), so a CJK line wraps at 72 bytes ≈ 24 full-width characters.
+" Commit messages in this project are English-first (see the
+" git-commit-architect skill), so this rarely matters.
+autocmd BufWritePre COMMIT_EDITMSG silent! keepjumps %s/\s\+$/e
+autocmd BufWritePre COMMIT_EDITMSG silent! keepjumps global/^[^#]/execute '.!fold -s -w 72'

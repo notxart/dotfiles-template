@@ -4,6 +4,15 @@
 # Disable ble.sh in VSCode to prevent multiline hanging issues.
 [[ "$TERM_PROGRAM" == *vscode* ]] && return 0
 
+# ble.sh recommends Bash >= 4.0 — auto-complete and menu-filter are 4.0+
+# features. macOS's system bash is 3.2 (frozen under GPLv3); install.sh
+# installs the Homebrew bash and switches the login shell, but sessions that
+# were already open (or explicit `/bin/bash` invocations) still run 3.2.
+# Say so clearly instead of silently degrading.
+if [[ ${BASH_VERSINFO[0]} -lt 4 ]]; then
+    printf 'Warning: Bash %s (< 4.0) — ble.sh auto-complete/menu-filter are unavailable; use Bash >= 4.0 (see README, install.sh handles it).\n' "${BASH_VERSION:-unknown}" >&2
+fi
+
 # --- Installation ---
 BLESH_DIR="$XDG_DATA_HOME/blesh"
 BLESH_INSTALLED_PATH="$BLESH_DIR/ble.sh"
