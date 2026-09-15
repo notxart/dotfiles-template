@@ -1,0 +1,24 @@
+# ---------------------------------------------------------------------------
+# Throwaway runs produced by tools/sandbox-check.sh.
+# That tool installs into a fake HOME to prove the manager never touches your
+# real configuration; this is where it writes the run it leaves behind for
+# inspection (report.txt, stdout.clean, stderr.clean).
+# ---------------------------------------------------------------------------
+.sandbox-e2e/
+
+# ---------------------------------------------------------------------------
+# App-generated MACHINE STATE — must never be committed.
+# These files record this machine's sessions and absolute paths; syncing them
+# to another computer breaks (or leaks) rather than helps.
+#
+# NOTE: identity files are intentionally NOT ignored. This repository IS the
+# sync mechanism for user config (see README "Privacy"), so
+# config/git/config.ini and config/git/work.ini stay tracked by design.
+# ---------------------------------------------------------------------------
+**/state.json
+**/session*
+**/*.sock
+**/*.pid
+**/*.lock
+**/*.log
+.DS_Store
