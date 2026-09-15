@@ -21,16 +21,50 @@ Install Options:
 EOF
 }
 
+# set_feature_flag <git_tui|dsh> — record that the user asked for this
+# explicitly. The SET marker is what lets resolve_feature_flags tell "the user
+# chose this now" apart from "nothing was said, keep what the machine had".
+set_feature_flag() {
+    case "$1" in
+        git_tui) FLAG_GIT_TUI="$2"; FLAG_GIT_TUI_SET=1 ;;
+        dsh)     FLAG_WITH_DSH="$2"; FLAG_WITH_DSH_SET=1 ;;
+        *)       log_error "Unknown feature flag: $1"; return 1 ;;
+    esac
+}
+
+# resolve_feature_flags — decide the effective flags.
+#
+# Precedence, highest first:
+#   1. an explicit command-line flag (already applied, marker set)
+#   2. an exported override (lets tests and users force a value)
+#   3. what this machine recorded in the manifest on its last install
+#   4. the compiled-in default, off
+#
+# Step 3 uses this only for the registry, but the same resolution is what lets
+# `update` re-apply the toolchain this machine actually chose, without the user
+# re-typing --with-git-tui every time.
+resolve_feature_flags() {
+    if [[ "${FLAG_GIT_TUI_SET:-0}" -eq 0 && "${FLAG_GIT_TUI_ENV:-0}" -eq 0 ]]; then
+        FLAG_GIT_TUI="$(manifest_flag_get git_tui)"
+        [[ -n "$FLAG_GIT_TUI" ]] || FLAG_GIT_TUI=0
+    fi
+    if [[ "${FLAG_WITH_DSH_SET:-0}" -eq 0 && "${FLAG_WITH_DSH_ENV:-0}" -eq 0 ]]; then
+        FLAG_WITH_DSH="$(manifest_flag_get dsh)"
+        [[ -n "$FLAG_WITH_DSH" ]] || FLAG_WITH_DSH=0
+    fi
+    export FLAG_GIT_TUI FLAG_WITH_DSH
+}
+
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --with-git-tui)
-                FLAG_GIT_TUI=1
+                set_feature_flag git_tui 1
                 log_info "Option enabled: Git TUI Review Stack"
                 shift
                 ;;
             --with-dsh)
-                FLAG_WITH_DSH=1
+                set_feature_flag dsh 1
                 log_info "Option enabled: DeepSeek Harness"
                 shift
                 ;;
@@ -59,8 +93,12 @@ cmd_install() {
     # Verify the paths this manager is about to install into are the same ones
     # the user's shell will read. Runs before anything touches the system, so a
     # divergence is reported rather than silently acted upon.
-    xdg_assert_consistency --strict || exit 1
+    xdg_assert_consistency --strict || return 1
+
+    # The manifest is authoritative for what this machine already opted into;
+    # an explicit command-line flag overrides it.
     manifest_init
+    resolve_feature_flags
     manifest_flag_set "git_tui" "$FLAG_GIT_TUI"
     manifest_flag_set "dsh" "$FLAG_WITH_DSH"
 
@@ -84,7 +122,7 @@ cmd_install() {
     fi
 
     configure_fd_alias
-    setup_symlinks
+    link_setup
     configure_gpg
 
     if [[ "$FLAG_GIT_TUI" -eq 0 || "$FLAG_WITH_DSH" -eq 0 ]]; then
@@ -103,10 +141,5 @@ cmd_install() {
 
 cmd_update() {
     log_error "The 'update' command is not implemented yet (planned: Step 8)."
-    exit 1
-}
-
-cmd_config() {
-    log_error "The 'config' command is not implemented yet (planned: Step 6)."
-    exit 1
+    return 1
 }

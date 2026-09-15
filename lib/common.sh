@@ -35,8 +35,15 @@ readonly CLR_RED="\033[1;31m"
 readonly CLR_MUTED="\033[0;37m"
 
 # Feature Flags
-FLAG_GIT_TUI=0
-FLAG_WITH_DSH=0
+#
+# An unprefixed assignment here would clobber a value supplied from outside
+# (an exported override, or the machine's recorded manifest) every time this
+# module is sourced. Default only when nothing was provided; which source wins
+# is decided explicitly by resolve_feature_flags below.
+FLAG_GIT_TUI="${FLAG_GIT_TUI:-0}"
+FLAG_WITH_DSH="${FLAG_WITH_DSH:-0}"
+FLAG_GIT_TUI_SET=0
+FLAG_WITH_DSH_SET=0
 
 # Shell guidance shown in the installer's final message when the user's login
 # shell is not bash (set by ensure_bash_shell; empty = keep the default message).
@@ -93,6 +100,20 @@ log_error()   { printf "\n${CLR_RED}Error: %s${CLR_RESET}\n" "$1" >&2; }
 # ==============================================================================
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+# sha256_file <path> — hex digest on stdout, empty when no tool is available.
+# Advisory only: git remains the authority on whether content drifted, so a
+# missing checksum tool degrades the manifest to "no hash recorded" rather
+# than failing an install.
+sha256_file() {
+    if command_exists sha256sum; then
+        sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    elif command_exists shasum; then
+        shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+    elif command_exists openssl; then
+        openssl dgst -sha256 "$1" 2>/dev/null | awk '{print $NF}'
+    fi
+}
 
 init_version_sorter() {
     if sort --version-sort </dev/null >/dev/null 2>&1; then
