@@ -27,6 +27,19 @@ export LESS_TERMCAP_so=$'\e[1;44;33m'  # Begins standout-mode
 export LESS_TERMCAP_ue=$'\e[0m'        # Ends underline
 export LESS_TERMCAP_us=$'\e[1;32m'     # Begins underline
 
+# pnpm global directory (Node.js-free standalone binary; installed by
+# install.sh into $XDG_DATA_HOME/pnpm). pnpm 12 keeps its binaries under
+# $PNPM_HOME/bin (pnpm itself, node/npm provisioned via `pnpm runtime`,
+# and all globally installed CLIs). See https://pnpm.io/installation.
+export PNPM_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/pnpm"
+# Prepend pnpm's bin directory to PATH if it exists
+if [[ -d "$PNPM_HOME/bin" && ":$PATH:" != *":$PNPM_HOME/bin:"* ]]; then
+    export PATH="$PNPM_HOME/bin:$PATH"
+fi
+
+# DeepSeek Harness config root (user skills live in $DSH_HOME/skills).
+# Keeps ~/.dsh out of the home directory; DSH resolves $DSH_HOME first.
+export DSH_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/dsh"
 
 # ----------------------------------------------------------------------
 # USER CUSTOMIZATIONS

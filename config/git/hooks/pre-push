@@ -1,0 +1,19 @@
+#!/bin/sh
+# ==============================================================================
+# Global pre-push Dispatcher
+# Path: ~/.config/git/hooks/pre-push
+# Description: core.hooksPath redirects ALL hooks to this global directory,
+#              which would silently disable repository-local hooks. This
+#              dispatcher restores them: a repo hook stored as
+#              .git/hooks/pre-push.local (executable) is chained transparently.
+#              (Stdin with the remote ref list is passed through via exec.)
+# ==============================================================================
+
+HOOK_NAME="$(basename "$0")"
+LOCAL_HOOK="$(git rev-parse --git-dir)/hooks/${HOOK_NAME}.local"
+
+if [ -x "$LOCAL_HOOK" ]; then
+    exec "$LOCAL_HOOK" "$@"
+fi
+
+exit 0

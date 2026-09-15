@@ -1,0 +1,55 @@
+#!/bin/sh
+# ==============================================================================
+# Global prepare-commit-msg Hook
+# Path: ~/.config/git/hooks/prepare-commit-msg
+# Description: Injects an AI-generated commit message draft
+#              (.git/AI_COMMIT_MSG, written by an AI agent working in
+#              draft-only mode) into the commit editor buffer, then chains
+#              the repository-local hook at .git/hooks/prepare-commit-msg.local
+#              if present.
+#
+# Behavior:
+#   - Injection happens ONLY for plain `git commit` (no -m/-t/-F source,
+#     no merge/amend): a human still reviews and edits the message in $EDITOR.
+#   - The draft buffer is NOT deleted here: it survives an editor abort / GPG
+#     signing failure, and is removed by the global post-commit dispatcher
+#     after a successful commit (any source, incl. -m/amend - which also
+#     prevents stale drafts from leaking into later commits).
+#   - Per-worktree safe: $(git rev-parse --git-dir) resolves to the worktree's
+#     own gitdir, so each worktree has an independent AI_COMMIT_MSG buffer.
+# ==============================================================================
+set -e
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"
+SHA1="$3"
+
+GIT_DIR="$(git rev-parse --git-dir)"
+AI_MSG_FILE="${GIT_DIR}/AI_COMMIT_MSG"
+
+# Inject the AI draft only for plain `git commit` (empty source).
+# The draft is wrapped to <= 72 columns AT INJECTION (fold -s -w 72:
+# word-boundary, line-by-line, bullets/structure preserved), so the editor
+# always opens a wrapped draft regardless of the user's vim/editor config.
+# The vimrc BufWritePre rewrap remains as a second line of defense for
+# hand edits made during review.
+if [ -z "$COMMIT_SOURCE" ] && [ -f "$AI_MSG_FILE" ] && [ -s "$AI_MSG_FILE" ]; then
+    TEMP_FILE="$(mktemp)"
+
+    fold -s -w 72 "$AI_MSG_FILE" > "$TEMP_FILE"
+    printf '\n' >> "$TEMP_FILE"
+    cat "$COMMIT_MSG_FILE" >> "$TEMP_FILE"
+
+    mv "$TEMP_FILE" "$COMMIT_MSG_FILE"
+fi
+
+# Chain the repository-local hook (if any) for backwards compatibility.
+# exec runs the hook as this process (direct argv execve - no shell string
+# interpretation, same trust boundary as a plain call) so the hook's exit
+# status reaches git unchanged. The AI draft is kept until post-commit.
+LOCAL_HOOK="${GIT_DIR}/hooks/prepare-commit-msg.local"
+if [ -x "$LOCAL_HOOK" ]; then
+    exec "$LOCAL_HOOK" "$COMMIT_MSG_FILE" "$COMMIT_SOURCE" "$SHA1"
+fi
+
+exit 0

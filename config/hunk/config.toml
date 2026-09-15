@@ -1,0 +1,11 @@
+# =============================================
+# Hunk Config
+# Path: ~/.config/hunk/config.toml
+# Part of the optional AI review toolchain
+# (installed via './install.sh --with-git-tui')
+# =============================================
+
+theme = "auto"
+mode = "auto"
+exclude_untracked = false
+agent_notes = true
