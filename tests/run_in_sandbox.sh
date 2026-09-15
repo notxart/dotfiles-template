@@ -48,13 +48,17 @@ printf '#!/bin/sh\necho "lazygit, version=0.50.0+ds1, commit=abc, builddate=x, g
 chmod +x "$RUN/bin/"*
 
 # --- deterministic environment -------------------------------------------------
+# Clear every variable the manager and config/bash/rc.d share BEFORE setting the
+# sandbox values. Without this, a value exported by the invoking shell (a real
+# GNUPGHOME or GIT_CONFIG_GLOBAL) leaks into the run and the cross-layer
+# consistency check correctly — but uselessly — reports a mismatch.
+unset PNPM_HOME DSH_HOME GNUPGHOME GIT_CONFIG_GLOBAL 2>/dev/null || true
+
 export HOME="$RUN/home"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME_OVERRIDE:-$HOME/.config}"
 export XDG_DATA_HOME="$HOME/.local/share"
 export XDG_STATE_HOME="$HOME/.local/state"
 export XDG_CACHE_HOME="$HOME/.cache"
-export PNPM_HOME="$XDG_DATA_HOME/pnpm"
-export DSH_HOME="$XDG_DATA_HOME/dsh"
 export PATH="$RUN/bin:$PNPM_BIN:$PATH"
 export LC_ALL=C
 

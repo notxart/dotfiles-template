@@ -51,19 +51,36 @@ trap cleanup EXIT INT TERM HUP
 
 # --- Dispatch -----------------------------------------------------------------
 main() {
-    # A leading option (or no argument) means the historical `./install.sh`
-    # style: `./manager.sh` and `./manager.sh --with-git-tui` both mean
-    # `install`. Only a non-option first word is treated as a subcommand.
-    local command="install"
-    if [[ $# -gt 0 && "$1" != -* ]]; then
-        command="$1"
-        shift
-    fi
+    # Manager-level flags are answered before dispatch. Matching them here (not
+    # in parse_args) keeps `--version` from running install's preamble, which
+    # used to print "Dotfiles Setup Initialized" before the version string.
+    case "${1:-}" in
+        -h|--help)    show_help; return 0 ;;
+        -V|--version) printf '%s %s\n' "$SCRIPT_NAME" "$MANAGER_VERSION"; return 0 ;;
+    esac
+
+    # The subcommand is ALWAYS explicit. There is deliberately no
+    # "bare flags mean install" fallback: `./manager.sh --with-git-tui` and
+    # `./manager.sh install --with-git-tui` doing the same thing is exactly the
+    # ambiguity that makes a command line hard to reason about.
+    local command="${1:-}"
+    [[ $# -gt 0 ]] && shift
 
     case "$command" in
         install)    cmd_install "$@" ;;
         update)     cmd_update "$@" ;;
         config)     cmd_config "$@" ;;
+        "")
+            # No subcommand at all: show the commands instead of guessing.
+            show_help
+            ;;
+        -*)
+            log_error "Missing subcommand before '$command'."
+            log_info "Did you mean: $SCRIPT_NAME install $command"
+            printf '\n' >&2
+            show_help >&2
+            exit 1
+            ;;
         *)
             log_error "Unknown command: $command"
             show_help >&2

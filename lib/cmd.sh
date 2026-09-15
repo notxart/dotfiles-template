@@ -55,6 +55,15 @@ cmd_install() {
 
     parse_args "$@"
     init_xdg_env
+
+    # Verify the paths this manager is about to install into are the same ones
+    # the user's shell will read. Runs before anything touches the system, so a
+    # divergence is reported rather than silently acted upon.
+    xdg_assert_consistency --strict || exit 1
+    manifest_init
+    manifest_flag_set "git_tui" "$FLAG_GIT_TUI"
+    manifest_flag_set "dsh" "$FLAG_WITH_DSH"
+
     detect_environment
     install_base_packages
     ensure_bash_shell
