@@ -27,16 +27,56 @@ SHA1="$3"
 GIT_DIR="$(git rev-parse --git-dir)"
 AI_MSG_FILE="${GIT_DIR}/AI_COMMIT_MSG"
 
-# Inject the AI draft only for plain `git commit` (empty source).
-# The draft is wrapped to <= 72 columns AT INJECTION (fold -s -w 72:
-# word-boundary, line-by-line, bullets/structure preserved), so the editor
-# always opens a wrapped draft regardless of the user's vim/editor config.
-# The vimrc BufWritePre rewrap remains as a second line of defense for
-# hand edits made during review.
-if [ -z "$COMMIT_SOURCE" ] && [ -f "$AI_MSG_FILE" ] && [ -s "$AI_MSG_FILE" ]; then
-    TEMP_FILE="$(mktemp)"
+# Locate the repository this hook belongs to. A hook is invoked by absolute
+# path (or through a symlink) and is NOT run inside its own repository, so
+# `git rev-parse` cannot be used here; the hook's own location is the only
+# reliable anchor. No absolute path is hardcoded, so a clone anywhere works.
+HOOK_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)" || HOOK_DIR=""
+# <root>/config/git/hooks/prepare-commit-msg -> strip three path components
+# (the file itself, "hooks" and "git") to land on <root>.
+REPO_ROOT="${HOOK_DIR%/*/*/*}"
+WRAP_MSG="${REPO_ROOT}/tools/wrap-msg.sh"
 
-    fold -s -w 72 "$AI_MSG_FILE" > "$TEMP_FILE"
+# Inject the AI draft only for plain `git commit` (empty source).
+#
+# The draft is wrapped to <= 72 columns AT INJECTION so the editor always opens
+# a readable draft regardless of the user's editor configuration. The wrapping
+# is done by tools/wrap-msg.sh, whose rules live in tools/lib/wrap-message.awk
+# and are shared with the standalone formatter. `fold -s -w 72` was replaced
+# because it splits words that have no space before the margin, drops the
+# continuation indent of a wrapped bullet, and leaves a trailing space at every
+# wrap point.
+#
+# If the formatter is unavailable (someone copied this hook out of the
+# repository), fall back to fold: a missing formatter must not block a commit.
+if [ -z "$COMMIT_SOURCE" ] && [ -f "$AI_MSG_FILE" ] && [ -s "$AI_MSG_FILE" ]; then
+    # The command substitution must sit directly in the `if` condition. With
+    # `set -e`, a bare `FORMATTED="$(...)"` whose command fails aborts the whole
+    # hook, so the error branch below would be unreachable and the draft would
+    # never be injected at all.
+    FORMAT_ERR="$(mktemp)"
+    if [ -x "$WRAP_MSG" ] && FORMATTED="$("$WRAP_MSG" < "$AI_MSG_FILE" 2>"$FORMAT_ERR")"; then
+        :
+    else
+        FORMATTED=""
+        if [ -s "$FORMAT_ERR" ]; then
+            sed 's/^/[prepare-commit-msg] /' "$FORMAT_ERR" >&2
+        fi
+        if [ -x "$WRAP_MSG" ]; then
+            printf '%s\n' "[prepare-commit-msg] draft rejected by tools/wrap-msg.sh; using fold instead." >&2
+        fi
+    fi
+    rm -f "$FORMAT_ERR"
+
+    TEMP_FILE="$(mktemp)"
+    if [ -n "$FORMATTED" ]; then
+        printf '%s\n' "$FORMATTED" > "$TEMP_FILE"
+    else
+        # Formatter unavailable or rejected the draft: a commit must still be
+        # possible, so use the historical behaviour.
+        fold -s -w 72 "$AI_MSG_FILE" > "$TEMP_FILE"
+    fi
+
     printf '\n' >> "$TEMP_FILE"
     cat "$COMMIT_MSG_FILE" >> "$TEMP_FILE"
 
