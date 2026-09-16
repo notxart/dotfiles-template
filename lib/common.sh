@@ -189,6 +189,9 @@ get_installed_version() {
     case "$cmd" in
         starship) awk '{print $2}' <<< "$output" ;;
         fzf)      awk '{print $1}' <<< "$output" ;;
+        # "v24.19.0" -> "24.19.0". The leading v is node's own convention and
+        # nothing else in the project compares versions with it attached.
+        node)     sed -E 's/^v//' <<< "$output" ;;
         lazygit)
             # Format: "..., version='0.50.0+ds1', ..., git version=2.47.3" -> "0.50.0"
             # Target the isolated 'version=' field and ignore trailing 'git version='

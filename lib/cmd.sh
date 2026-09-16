@@ -18,6 +18,12 @@ Install Options:
   --with-dsh      Install DeepSeek Harness via pnpm and link skills.
   -h, --help      Display this help documentation.
   -V, --version   Display the manager version.
+
+Update Options:
+  -n, --dry-run   Show what would be updated without changing anything.
+  --only <tool>   Update only this tool (repeatable, or comma-separated).
+                  Available: pnpm node fzf starship hunk lazygit dsh
+  -y, --yes       Do not ask for confirmation.
 EOF
 }
 
@@ -176,6 +182,5 @@ cmd_install() {
 }
 
 cmd_update() {
-    log_error "The 'update' command is not implemented yet."
-    return 1
+    update_run "$@"
 }
