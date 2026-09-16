@@ -27,16 +27,31 @@ You prepare everything; the human reviews, edits, and cryptographically signs.
    If verification steps are unknown, write `N/A` instead of inventing them.
 5. **Language**: commit messages in professional English; conversational
    explanations in the user's language.
+6. **Stage your own changes**: `git add` the files you changed, **by name**,
+   before writing the draft. A commit is built from the index, so anything left
+   unstaged is not part of the commit the draft describes — and the human cannot
+   confirm the file list from the draft alone. Never `git add -A` or
+   `git add .`: sweeping in files the change does not own hides the mistake
+   instead of showing it.
 
 ## Execution Protocol
 
-### Step 1 — Audit the diff
+### Step 1 — Stage and audit the diff
+
+Stage every file this change touched first, by name. The human reviews the
+staged set to confirm the agent knows what it changed; without it they are
+trusting the draft's summary of a diff they cannot see.
 
 ```bash
-git diff --staged    # staged changes first
-git diff             # if nothing is staged, unstaged changes
-git status -sb       # context: branch, untracked files
+git add path/one path/two   # by name: never `git add -A` or `git add .`
+git diff --staged           # the change this draft describes
+git status -sb              # branch, and anything left unstaged or untracked
 ```
+
+Then read the whole diff. If `git status -sb` shows further files that belong to
+this change, stage them too. If it shows files that do not belong to it, leave
+them alone and mention them in the hand-off — an unrelated file in the index is
+something the human must know about before committing.
 
 Read the full diff before writing anything. Do not summarize from memory.
 
@@ -83,6 +98,7 @@ worktrees never collide.
 ### Step 4 — Hand off to the human
 
 ```bash
+git diff --staged --stat    # the staged set, so the file list is verifiable
 echo "[AGENT HAND-OFF] Commit draft staged in .git/AI_COMMIT_MSG. Review it and run 'git commit' — the prepare-commit-msg hook injects the draft into your editor, then your GPG passphrase prompt follows."
 ```
 
