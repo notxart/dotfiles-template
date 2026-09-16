@@ -332,8 +332,14 @@ link_health() {
 # link_record <src> <dest> <mode> <kind> — persist the ownership decision.
 # kind is the manifest column: link, seed or adopt.
 link_record() {
-    local src="$1" dest="$2" mode="$3" kind="$4" hash="-" src_rel="$src"
-    src_rel="${src_rel#"$SCRIPT_DIR"/}"
+    local src="$1" dest="$2" mode="$3" kind="$4"
+    local hash="-" src_rel
+    # NOTE: src_rel is computed on its own line. `local a="$1" b="$a"` does NOT
+    # see the new value of a: `local` publishes all its names first (each set to
+    # empty), so b would be assigned the empty string and, under `set -u`, the
+    # reference aborts the run. That is what made every adoption and every link
+    # record fail with "src: unbound variable".
+    src_rel="${src#"$SCRIPT_DIR"/}"
     # Only genuine repository files get a content hash.
     if [[ "$kind" != "seed" && -f "$src" ]]; then
         hash="sha256:$(sha256_file "$src")"
