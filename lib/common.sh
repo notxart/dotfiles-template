@@ -58,7 +58,6 @@ DISTRO_PKGS=()
 
 # Resource Management State
 TMP_DIRS=()
-BACKUP_DIR=""
 
 # ==============================================================================
 # Cleanup & Signal Lifecycle Management

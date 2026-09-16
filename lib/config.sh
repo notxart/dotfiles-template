@@ -84,7 +84,7 @@ config_status() {
     # $SCRIPT_NAME is the ENTRY POINT (manager.sh). Deriving it from
     # BASH_SOURCE here would name the sourced module instead, telling the user
     # to run a file that is not meant to be executed directly.
-    log_info "Run '${SCRIPT_NAME:-manager.sh} config sync' to reconcile them (Step 6)."
+    log_info "Run '${SCRIPT_NAME:-manager.sh} config sync' to see what needs a decision."
     return 2
 }
 
@@ -143,12 +143,19 @@ config_reconcile_items() {
 }
 
 # config_backup <path> — a copy the user can recover from, under XDG state.
+# Delegates to backup_path, which keeps one directory per RUN and prunes old
+# runs, so a reconciliation touching several files stays recoverable as a unit
+# without the backup tree growing without limit.
 config_backup() {
-    local path="$1" dir
-    [[ -e "$path" || -L "$path" ]] || return 0
-    dir="$(backup_root)/$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$dir"
-    cp -a "$path" "$dir/" 2>/dev/null && log_info "Backed up: ${path#"$HOME"/} -> ${dir#"$HOME"/}"
+    local path="$1" dest
+    dest="$(backup_path "$path")" || {
+        log_warn "Could not back up ${path#"$HOME"/}."
+        return 1
+    }
+    [[ -n "$dest" ]] || return 0
+    backup_prune
+    log_info "Backed up: ${path#"$HOME"/} -> ${dest#"$HOME"/}"
+    return 0
 }
 
 # config_adopt <path> — make a real file part of the repository.
@@ -345,6 +352,9 @@ config_sync() {
 
     # ---- 3. act ------------------------------------------------------------
     local kind src dest
+    # One backup directory for the whole run, so everything this command
+    # replaces can be restored together.
+    backup_begin
     while IFS=$'\t' read -r kind src dest; do
         [[ -n "$kind" ]] || continue
         case "$kind" in

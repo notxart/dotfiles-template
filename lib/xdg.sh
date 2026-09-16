@@ -69,6 +69,94 @@ backup_root() {
     printf '%s\n' "$(state_dir)/backups"
 }
 
+# How many past runs to keep. Every operation that can replace a file backs the
+# file up first; without a limit those copies accumulate forever, and an
+# unbounded backup directory is one nobody ever opens.
+readonly BACKUP_KEEP=10
+
+# backup_dir_current — this run's backup directory, created on first call.
+#
+# The caller MUST invoke this once per run (backup_begin does) before calling
+# backup_path. It cannot be left implicit inside backup_path: callers capture
+# that function's output with $( ), which runs it in a SUBSHELL, so a variable
+# assigned there never reaches the next call and every file would land in a
+# directory of its own.
+backup_dir_current() {
+    if [[ -z "${BACKUP_RUN_DIR:-}" ]]; then
+        BACKUP_RUN_DIR="$(backup_root)/$(date +%Y%m%d_%H%M%S)"
+    fi
+    mkdir -p "$BACKUP_RUN_DIR" || return 1
+    printf '%s\n' "$BACKUP_RUN_DIR"
+}
+
+# backup_begin — start a backup run. Safe to call more than once; only the first
+# call in a run creates the directory, so every file touched by one command is
+# recoverable together and under a single timestamp a user can find.
+backup_begin() {
+    backup_dir_current >/dev/null
+    return 0
+}
+
+# backup_path <path> — copy <path> into this run's backup directory and print
+# the copy's location. Requires backup_begin (or backup_dir_current) to have run.
+backup_path() {
+    local path="$1" dest dir
+    [[ -e "$path" || -L "$path" ]] || return 0
+
+    if [[ -z "${BACKUP_RUN_DIR:-}" ]]; then
+        # Convenience for a standalone caller: derive the directory without
+        # relying on it surviving this function's own command substitution.
+        dir="$(backup_dir_current)" || return 1
+    else
+        dir="$BACKUP_RUN_DIR"
+        mkdir -p "$dir" || return 1
+    fi
+
+    # The backup MIRRORS the home layout instead of flattening it:
+    #   ~/.config/git/hooks/commit-msg -> <run>/.config/git/hooks/commit-msg
+    # Two files with the same basename therefore cannot collide, the original
+    # name is still findable, and restoring is a plain `cp -a <run>/.config ~/`.
+    local rel
+    case "$path" in
+        "$HOME"/*) rel="${path#"$HOME"/}" ;;
+        *)         rel="${path#/}" ;;
+    esac
+    dest="$dir/$rel"
+    mkdir -p "$(dirname "$dest")" || return 1
+
+    # A symlink is COPIED THROUGH, not copied as a link. `cp -a` would preserve
+    # it, so the "backup" would still point at the live file it was meant to
+    # protect — useless the moment that file is replaced, which is exactly the
+    # situation a backup exists for. The copy is therefore the bytes the link
+    # resolved to.
+    if [[ -L "$path" ]]; then
+        cp -L --preserve=mode,timestamps "$path" "$dest" 2>/dev/null || \
+            cp -L "$path" "$dest" 2>/dev/null || return 1
+    else
+        cp -a "$path" "$dest" 2>/dev/null || return 1
+    fi
+    printf '%s\n' "$dest"
+}
+
+# backup_prune — keep only the newest BACKUP_KEEP run directories.
+# Called after a backup, so the limit holds without a separate cron-like task.
+backup_prune() {
+    local root
+    root="$(backup_root)"
+    [[ -d "$root" ]] || return 0
+    # Directory names are timestamps, so reverse lexical order is newest first.
+    local -a runs=()
+    while IFS= read -r d; do
+        [[ -n "$d" ]] && runs+=("$d")
+    done < <(find "$root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -r)
+
+    local i
+    for (( i = BACKUP_KEEP; i < ${#runs[@]}; i++ )); do
+        rm -rf "${runs[i]}" 2>/dev/null || true
+    done
+    return 0
+}
+
 manifest_init() {
     local mf
     mf="$(manifest_path)"

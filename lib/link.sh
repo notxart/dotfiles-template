@@ -388,8 +388,30 @@ link_apply() {
             return "$LINK_BLOCKED"
             ;;
         "$LINK_STATE_STALE")
-            # A symlink we may safely retarget: either dangling, or pointing at
-            # a path that is not this repository's source.
+            # Two kinds of stale link exist and they must NOT be treated alike:
+            #
+            #   dangling          the target is gone, so the link is broken and
+            #                     carries no information. Safe to replace.
+            #   points elsewhere  the target EXISTS but is not this repository's
+            #                     source. Someone pointed it there on purpose --
+            #                     another checkout, a hand-written file, a second
+            #                     dotfiles tree. Removing it would silently
+            #                     destroy that decision.
+            #
+            # The first is replaced. The second is reported and left alone, for a
+            # human to re-point or remove -- with one exception: a *file*
+            # destination whose link target is a *directory* cannot serve the
+            # application in any case, and is the shape the old directory-level
+            # install left behind (`~/.config/tool -> repo/config/tool`). The
+            # directory itself lives in the repository and is not touched by
+            # removing the pointer, so nothing can be lost by replacing it.
+            local current
+            current="$(readlink "$dest" 2>/dev/null || true)"
+            if [[ -n "$current" && -e "$dest" && ! -d "$dest" ]]; then
+                log_warn "Points elsewhere: $dest -> $current"
+                log_info "Left untouched. Re-point it or remove it, then re-run."
+                return "$LINK_BLOCKED"
+            fi
             if [[ ! -e "$src" ]]; then
                 log_warn "Missing source for $dest: $src"
                 return "$LINK_MISSING_SRC"
@@ -612,9 +634,9 @@ link_setup() {
         fi
     fi
 
-    if [[ "$LINK_SETUP_PENDING" -gt 0 ]]; then
-        log_warn "$LINK_SETUP_PENDING path(s) need your decision — run: $SCRIPT_NAME config sync"
-    fi
+    # The count is reported by the caller (cmd_install), which can also explain
+    # what `config sync` will do about it. A second warning here would just say
+    # the same thing twice.
     return 0
 }
 

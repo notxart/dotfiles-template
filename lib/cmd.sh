@@ -158,9 +158,24 @@ cmd_install() {
     else
         log_info "Run 'source ~/.bashrc' or restart your terminal session to apply changes."
     fi
+
+    # Tell the user what to do next, in the terms they will actually meet.
+    # Nothing above this point moves or replaces a file, so anything the
+    # machine and the repository disagree about is still waiting.
+    local pending="${LINK_SETUP_PENDING:-0}"
+    if [[ "$pending" -gt 0 ]]; then
+        printf '\n'
+        log_warn "$pending path(s) were left alone because they are not symlinks."
+        log_info "Run '${SCRIPT_NAME:-manager.sh} config sync' to review them:"
+        log_info "  it shows what differs, links what is identical, and asks before"
+        log_info "  replacing anything."
+    else
+        printf '\n'
+        log_info "For a full comparison with this machine, run: ${SCRIPT_NAME:-manager.sh} config sync"
+    fi
 }
 
 cmd_update() {
-    log_error "The 'update' command is not implemented yet (planned: Step 8)."
+    log_error "The 'update' command is not implemented yet."
     return 1
 }
