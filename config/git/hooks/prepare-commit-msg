@@ -17,6 +17,27 @@
 #     prevents stale drafts from leaking into later commits).
 #   - Per-worktree safe: $(git rev-parse --git-dir) resolves to the worktree's
 #     own gitdir, so each worktree has an independent AI_COMMIT_MSG buffer.
+#
+# WRAPPING: the rules are INLINED below, and config/git/wrap-msg.sh carries the same
+# rules inline for the paths this hook never sees. tests/verify_step4_registry.sh
+# asserts the two produce byte-identical output.
+#
+# Two things forced the rules to travel with their caller:
+#
+#   1. This hook is reached through a symlinked directory
+#      (~/.config/git -> <repo>/config/git), so `cd -P` on its own path resolves
+#      the DIRECTORY link rather than the hook link and lands in whatever
+#      repository ~/.config/git points at. Locating a sibling file from the
+#      hook's path is therefore unreliable; an earlier version silently fell
+#      back to `fold -s`, which drops the continuation indent of every wrapped
+#      bullet.
+#   2. config/git/wrap-msg.sh is invoked as core.editor, which git runs through a
+#      path that may itself be a symlink, so it cannot source a sibling file
+#      either. It inlines the same rules for the same reason.
+#
+# Division of labour: this hook covers plain `git commit`; core.editor covers
+# every path that opens an editor, including `--amend` and `rebase -i`, neither
+# of which runs this hook.
 # ==============================================================================
 set -e
 
@@ -27,55 +48,41 @@ SHA1="$3"
 GIT_DIR="$(git rev-parse --git-dir)"
 AI_MSG_FILE="${GIT_DIR}/AI_COMMIT_MSG"
 
-# Locate the repository this hook belongs to. A hook is invoked by absolute
-# path (or through a symlink) and is NOT run inside its own repository, so
-# `git rev-parse` cannot be used here; the hook's own location is the only
-# reliable anchor. No absolute path is hardcoded, so a clone anywhere works.
-HOOK_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)" || HOOK_DIR=""
-# <root>/config/git/hooks/prepare-commit-msg -> strip three path components
-# (the file itself, "hooks" and "git") to land on <root>.
-REPO_ROOT="${HOOK_DIR%/*/*/*}"
-WRAP_MSG="${REPO_ROOT}/tools/wrap-msg.sh"
-
 # Inject the AI draft only for plain `git commit` (empty source).
-#
-# The draft is wrapped to <= 72 columns AT INJECTION so the editor always opens
-# a readable draft regardless of the user's editor configuration. The wrapping
-# is done by tools/wrap-msg.sh, whose rules live in tools/lib/wrap-message.awk
-# and are shared with the standalone formatter. `fold -s -w 72` was replaced
-# because it splits words that have no space before the margin, drops the
-# continuation indent of a wrapped bullet, and leaves a trailing space at every
-# wrap point.
-#
-# If the formatter is unavailable (someone copied this hook out of the
-# repository), fall back to fold: a missing formatter must not block a commit.
 if [ -z "$COMMIT_SOURCE" ] && [ -f "$AI_MSG_FILE" ] && [ -s "$AI_MSG_FILE" ]; then
-    # The command substitution must sit directly in the `if` condition. With
-    # `set -e`, a bare `FORMATTED="$(...)"` whose command fails aborts the whole
-    # hook, so the error branch below would be unreachable and the draft would
-    # never be injected at all.
-    FORMAT_ERR="$(mktemp)"
-    if [ -x "$WRAP_MSG" ] && FORMATTED="$("$WRAP_MSG" < "$AI_MSG_FILE" 2>"$FORMAT_ERR")"; then
-        :
-    else
-        FORMATTED=""
-        if [ -s "$FORMAT_ERR" ]; then
-            sed 's/^/[prepare-commit-msg] /' "$FORMAT_ERR" >&2
-        fi
-        if [ -x "$WRAP_MSG" ]; then
-            printf '%s\n' "[prepare-commit-msg] draft rejected by tools/wrap-msg.sh; using fold instead." >&2
-        fi
-    fi
-    rm -f "$FORMAT_ERR"
-
     TEMP_FILE="$(mktemp)"
-    if [ -n "$FORMATTED" ]; then
-        printf '%s\n' "$FORMATTED" > "$TEMP_FILE"
-    else
-        # Formatter unavailable or rejected the draft: a commit must still be
-        # possible, so use the historical behaviour.
-        fold -s -w 72 "$AI_MSG_FILE" > "$TEMP_FILE"
-    fi
+
+    awk '
+    function wrap(prefix, cont, text,    out, line, word, sep, i, n, w) {
+        n = split(text, w, /[ \t]+/)
+        out = ""
+        line = prefix
+        for (i = 1; i <= n; i++) {
+            word = w[i]
+            if (word == "") continue
+            sep = (line == prefix) ? "" : " "
+            if (length(line) + length(sep) + length(word) > 72 && line != prefix) {
+                out = out line "\n"
+                line = cont word
+            } else {
+                line = line sep word
+            }
+        }
+        return out line
+    }
+    NR == 1 { sub(/[ \t]+$/, ""); print; next }
+    {
+        line = $0
+        sub(/[ \t]+$/, "", line)
+        if (line == "") { print ""; next }
+        if (line ~ /^(Refs|Closes|Fixes|Co-authored-by|Signed-off-by|Reviewed-by|Acked-by|Tested-by|Reported-by):/) {
+            print line
+            next
+        }
+        if (line ~ /^- /) { print wrap("- ", "  ", substr(line, 3)); next }
+        print wrap("", "", line)
+    }
+    ' "$AI_MSG_FILE" > "$TEMP_FILE"
 
     printf '\n' >> "$TEMP_FILE"
     cat "$COMMIT_MSG_FILE" >> "$TEMP_FILE"

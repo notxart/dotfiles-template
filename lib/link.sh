@@ -38,36 +38,186 @@ readonly LINK_STATE_BLOCKED="blocked"
 # Registry — the single source of truth for what this repository links where.
 #
 # Records are "<source relative to the repo root>\t<absolute destination>\t<mode>".
-# The source is empty while a path is only _adopted_ in the manifest (the file
-# is already in $HOME and becomes ours during `config sync`).
 #
-# NOTE: lib/packages.sh, lib/tools.sh and lib/shell.sh belong to the setup
-# process, not to this list; only the registry is repointed in Step 4.
+# Every record is FILE level. Directory-level linking (the original design) had
+# two consequences that this repository exists to remove:
+#
+#   1. `~/.config/<tool>/` was a symlink into the working tree, so any file an
+#      application wrote there appeared inside the repository and would be
+#      committed by the next `git add .`.
+#   2. A file the USER created in that directory (for example
+#      config/bash/rc.d/99-local.sh) also landed in the repository, and was
+#      then silently relocated when the directory was replaced.
+#
+# With file-level records, `~/.config/<tool>/` is an ordinary directory: the
+# repository owns named files inside it, everything else belongs to the user or
+# to the application. `config sync` (Step 5) is what turns an untracked file
+# into a tracked one, deliberately and on request.
+#
+# Only these four groups are the SETTLED half (see link_registry_records); the
+# git-tui toolchain and the discovered skill directories are the RELEASE half.
 # ==============================================================================
-link_registry() {
-    # State-independent shared environment.
-    printf '%s\t%s\t%s\n' ".bash_profile"                     "$HOME/.bash_profile"                      "link"
-    printf '%s\t%s\t%s\n' ".bashrc"                           "$HOME/.bashrc"                            "link"
-    printf '%s\t%s\t%s\n' "config/starship.toml"              "$XDG_CONFIG_HOME/starship.toml"           "link"
-    printf '%s\t%s\t%s\n' "config/bash"                       "$XDG_CONFIG_HOME/bash"                    "link"
-    printf '%s\t%s\t%s\n' "config/git"                        "$XDG_CONFIG_HOME/git"                     "link"
-    printf '%s\t%s\t%s\n' "config/vim"                        "$XDG_CONFIG_HOME/vim"                     "link"
 
-    # Optional toolchain, enabled per machine.
+# link_registry_skill_dest <name> — where a skill directory is linked.
+link_registry_skill_dest() {
+    printf '%s\n' "${DSH_HOME:-$XDG_DATA_HOME/dsh}/skills/$1"
+}
+
+# link_is_tracked <path> — is this file part of the repository (in the index)?
+#
+# The globs below cannot tell a module that belongs to the repository from a
+# file the user created there. While `~/.config/bash` was a directory symlink,
+# `~/.config/bash/rc.d/99-local.sh` landed INSIDE the repository, so a plain
+# `rc.d/*.sh` glob would claim it as ours and link it back — silently
+# converting a private file into a tracked-looking one.
+#
+# Two properties matter here, and both were learned the hard way:
+#
+#   * NO SUBPROCESS. The first version shelled out to `git ls-files` per file
+#     and the second added a `grep` per file; a trace showed 300 invocations
+#     per install. Every one of those processes reads stdin, which swallowed
+#     the registry stream the caller was iterating and killed the producer with
+#     "printf: write error: Broken pipe". The match below is bash built-in.
+#   * NO CACHED STATE. link_is_tracked is called from command substitutions, so
+#     a cache assigned here cannot survive: each `$( ... )` is a new subshell.
+#     The tracked list is therefore passed in by the caller, computed once, as
+#     a newline-delimited string.
+#
+# LINK_TRACKED_SET may be supplied by the caller (link_setup, link_verify_all)
+# to avoid re-querying git; when empty it is derived here for standalone use.
+link_is_tracked() {
+    local rel="$1" set
+    # A file counts as a repository source only when it is BOTH tracked and
+    # present: `git ls-files` keeps reporting a file deleted from the working
+    # tree but not yet staged.
+    [[ -e "${LINK_REPO_ROOT:-$SCRIPT_DIR}/$rel" ]] || return 1
+
+    # Derived once and EXPORTED, so the subshells that command substitutions
+    # create inherit it instead of re-querying git each time (300 calls per
+    # install, measured).
+    set="${LINK_TRACKED_SET:-}"
+    if [[ -z "$set" ]]; then
+        set="$(git -C "${LINK_REPO_ROOT:-$SCRIPT_DIR}" ls-files 2>/dev/null </dev/null)"
+        LINK_TRACKED_SET="$set"
+        export LINK_TRACKED_SET
+    fi
+    [[ $'\n'"$set"$'\n' == *$'\n'"$rel"$'\n'* ]]
+}
+
+# link_repo_root — the working tree git actually knows about. Cached once, and
+# used by link_is_tracked.
+#
+# NOTE: when this repository is copied WITHOUT its .git directory (a test
+# fixture, or a user who unzipped an archive), git cannot answer the question
+# and every file reads as untracked. That is the deliberate fail-safe
+# direction: an untracked file is never linked, so the worst outcome is a
+# reported candidate rather than a private file claimed as a dotfile.
+link_repo_root() {
+    if [[ -z "${LINK_REPO_ROOT:-}" ]]; then
+        if LINK_REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null </dev/null)" \
+           && [[ -n "$LINK_REPO_ROOT" ]]; then
+            :
+        else
+            LINK_REPO_ROOT="$SCRIPT_DIR"
+        fi
+    fi
+    printf '%s\n' "$LINK_REPO_ROOT"
+}
+
+# link_registry_bash — the shell layer. rc.d is globbed rather than listed so
+# that adding a tracked module to the repository does not require editing this
+# function; the loader in config/bash/main.sh sources the same directory
+# lexicographically. Untracked files are excluded — see link_is_tracked.
+link_registry_bash() {
+    printf '%s\t%s\t%s\n' "config/bash/main.sh" "$XDG_CONFIG_HOME/bash/main.sh" "link"
+    local f rel
+    for f in "$SCRIPT_DIR"/config/bash/rc.d/*.sh; do
+        [[ -e "$f" ]] || continue
+        rel="config/bash/rc.d/$(basename "$f")"
+        link_is_tracked "$rel" || continue
+        printf '%s\t%s\t%s\n' "$rel" "$XDG_CONFIG_HOME/bash/rc.d/$(basename "$f")" "link"
+    done
+}
+
+# link_registry_git — identity, work identity, and the global hooks.
+#
+# work.ini is `seed`, not `link`: it ships empty so `git commit` refuses until
+# the user fills in a company identity, and once filled the file is theirs. A
+# link would also point the user's company email into the repository working
+# tree, which is exactly the identity-sync question D5 settled: keep it
+# tracked, but never overwrite what the user wrote.
+link_registry_git() {
+    printf '%s\t%s\t%s\n' "config/git/config.ini" "$XDG_CONFIG_HOME/git/config.ini" "link"
+    printf '%s\t%s\t%s\n' "config/git/work.ini"   "$XDG_CONFIG_HOME/git/work.ini"   "seed"
+    local f rel
+    for f in "$SCRIPT_DIR"/config/git/hooks/*; do
+        [[ -e "$f" ]] || continue
+        rel="config/git/hooks/$(basename "$f")"
+        # Same reasoning as rc.d: a *.local hook the user dropped here while
+        # the directory was linked is theirs, not ours.
+        link_is_tracked "$rel" || continue
+        printf '%s\t%s\t%s\n' "$rel" "$XDG_CONFIG_HOME/git/hooks/$(basename "$f")" "link"
+    done
+}
+
+# link_registry — the registry, computed ONCE per process and cached.
+#
+# The cache is not an optimisation, it is the fix for a real defect. The
+# registry was previously built on every call, and an install made 25 of them.
+# Each one is consumed through a process substitution, and several consumers
+# end their pipeline early (`| sort`, a `while` loop that stops matching), which
+# closes the read end while link_registry is still printing. Bash then reports
+# "printf: write error: Broken pipe" for every remaining record — 40 to 240
+# warnings per install, escalating as later calls die sooner.
+#
+# Building once removes the hazard: the producer finishes before any consumer
+# looks at it, so no consumer can close the pipe mid-write.
+#
+# LINK_REGISTRY_CACHE is intentionally NOT exported. It is computed inside
+# command substitutions too (where a subshell recomputes it once, which is
+# correct and cheap), and exporting would let a stale value outlive a flag
+# change or the migration that rewrites the filesystem.
+link_registry() {
+    if [[ -z "${LINK_REGISTRY_CACHE:-}" ]]; then
+        local built
+        built="$(link_registry_build)" || return 1
+        # Mark as computed even when the registry is legitimately empty, so it
+        # is not rebuilt on every call.
+        if [[ -z "$built" ]]; then
+            LINK_REGISTRY_CACHE=$'\n'
+        else
+            # Trailing newline is part of the contract: callers use
+            # `while IFS= read -r line`, which drops a final line that lacks one.
+            LINK_REGISTRY_CACHE="$built"$'\n'
+        fi
+    fi
+    printf '%s' "$LINK_REGISTRY_CACHE"
+}
+
+# link_registry_build — the actual list. Call link_registry instead.
+link_registry_build() {
+    printf '%s\t%s\t%s\n' ".bash_profile"      "$HOME/.bash_profile"      "link"
+    printf '%s\t%s\t%s\n' ".bashrc"            "$HOME/.bashrc"            "link"
+    link_registry_bash
+    link_registry_git
+    printf '%s\t%s\t%s\n' "config/vim/vimrc"   "$XDG_CONFIG_HOME/vim/vimrc"      "link"
+    printf '%s\t%s\t%s\n' "config/starship.toml" "$XDG_CONFIG_HOME/starship.toml" "link"
+
+    # Optional toolchain, per machine. config.toml only: hunk keeps its session
+    # state in state.json beside it, and that state must never be linked.
     if [[ "${FLAG_GIT_TUI:-0}" -eq 1 ]]; then
-        printf '%s\t%s\t%s\n' "config/lazygit"                "$XDG_CONFIG_HOME/lazygit"                 "link"
-        printf '%s\t%s\t%s\n' "config/hunk"                   "$XDG_CONFIG_HOME/hunk"                    "link"
+        printf '%s\t%s\t%s\n' "config/hunk/config.toml"     "$XDG_CONFIG_HOME/hunk/config.toml"     "link"
+        printf '%s\t%s\t%s\n' "config/lazygit/config.yml"   "$XDG_CONFIG_HOME/lazygit/config.yml"   "link"
     fi
 
     # Agent skills are discovered dynamically: adding a directory under
     # skills/ must not require editing this function.
     if [[ "${FLAG_WITH_DSH:-0}" -eq 1 ]]; then
-        local skill_dir skill_name dsh_home
-        dsh_home="${DSH_HOME:-$XDG_DATA_HOME/dsh}"
+        local skill_dir skill_name
         for skill_dir in "$SCRIPT_DIR"/skills/*/; do
             [[ -d "$skill_dir" ]] || continue
             skill_name="$(basename "$skill_dir")"
-            printf '%s\t%s\t%s\n' "skills/$skill_name" "$dsh_home/skills/$skill_name" "link"
+            printf '%s\t%s\t%s\n' "skills/$skill_name" "$(link_registry_skill_dest "$skill_name")" "link"
         done
     fi
 }
@@ -77,12 +227,12 @@ link_registry() {
 # stable across runs (orphan detection) use this, because a flag toggled off
 # on a later run must not look like the user deleted repository files.
 link_registry_records() {
-    printf '%s\t%s\t%s\n' ".bash_profile"          "$HOME/.bash_profile"            "link"
-    printf '%s\t%s\t%s\n' ".bashrc"                "$HOME/.bashrc"                  "link"
-    printf '%s\t%s\t%s\n' "config/starship.toml"   "$XDG_CONFIG_HOME/starship.toml" "link"
-    printf '%s\t%s\t%s\n' "config/bash"            "$XDG_CONFIG_HOME/bash"          "link"
-    printf '%s\t%s\t%s\n' "config/git"             "$XDG_CONFIG_HOME/git"           "link"
-    printf '%s\t%s\t%s\n' "config/vim"             "$XDG_CONFIG_HOME/vim"           "link"
+    printf '%s\t%s\t%s\n' ".bash_profile"        "$HOME/.bash_profile"              "link"
+    printf '%s\t%s\t%s\n' ".bashrc"              "$HOME/.bashrc"                    "link"
+    link_registry_bash
+    link_registry_git
+    printf '%s\t%s\t%s\n' "config/vim/vimrc"     "$XDG_CONFIG_HOME/vim/vimrc"       "link"
+    printf '%s\t%s\t%s\n' "config/starship.toml" "$XDG_CONFIG_HOME/starship.toml"  "link"
 }
 
 # link_registry_release — the DISCOVERED half: records that may legitimately
@@ -93,6 +243,30 @@ link_registry_release() {
     printf '%s\n' "$all" | grep -vFf <(link_registry_records) || true
 }
 
+# link_registry_refs — the repository-relative sources, one per line.
+#
+# Exists as a batch lookup. Callers that classify many files used to invoke
+# link_registry() once per file; with 23 records and several directories that
+# is hundreds of subshells per install, and every early-exiting consumer
+# killed the producer with SIGPIPE ("printf: write error: Broken pipe").
+link_registry_refs() {
+    link_registry | cut -f1
+}
+
+# link_registry_dest_dirs — the directories that must be REAL directories, not
+# symlinks into the repository: every distinct parent of a registry
+# destination. `migrate` uses this to find what still needs converting, and it
+# is derived rather than hardcoded so adding a record cannot forget it.
+link_registry_dest_dirs() {
+    link_registry | awk -F'\t' '
+        {
+            d = $2
+            sub(/\/[^\/]*$/, "", d)      # strip the final component
+            if (d != "" && !seen[d]++) print d
+        }
+    ' | sort
+}
+
 # link_mode <dest> — which ownership rule applies. The manifest wins: it
 # records what the user decided during `config sync` (an adopted file or an
 # explicit ignore), and that decision outlives the registry default.
@@ -100,7 +274,7 @@ link_mode() {
     local dest="$1" record mode
     record="$(manifest_get "$dest" 2>/dev/null || true)"
     if [[ -n "$record" ]]; then
-        mode="$(printf '%s\n' "$record" | head -n1 | cut -f4)"
+        mode="$(printf '%s\n' "$record" | cut -f4 | awk 'NR==1{print; exit}')"
         if [[ -n "$mode" ]]; then
             printf '%s\n' "$mode"
             return 0
@@ -144,7 +318,7 @@ link_health() {
     fi
     # Hash comparison is advisory: drift is ultimately resolved by git in
     # `config sync`, so a miss here is not fatal.
-    recorded="$(manifest_get "$dest" 2>/dev/null | head -n1 | cut -f5)"
+    recorded="$(manifest_get "$dest" 2>/dev/null | cut -f5 | awk 'NR==1{print; exit}')"
     if [[ -n "$recorded" && "$recorded" == sha256:* ]]; then
         actual="$(sha256_file "$dest")"
         if [[ -n "$actual" && "sha256:$actual" != "$recorded" ]]; then
@@ -322,9 +496,23 @@ link_prune_orphans() {
 link_setup() {
     log_step "Synchronizing Dotfiles & Symlinks"
     LINK_SETUP_PENDING=0
+    LINK_SETUP_BLOCKED=()
     local src dest mode health n created=0 kept=0 blocked=0 wrong_target=0 missing_src=0
 
-    while IFS=$'\t' read -r src dest mode; do
+    # Read the registry into memory FIRST. The loop body runs external commands
+    # (readlink, dirname, git) and bash does not redirect their stdin, so they
+    # consume the producer's stream: the loop then ends early and link_registry
+    # dies with "printf: write error: Broken pipe". Buffering finishes the
+    # producer before the loop starts, which removes the hazard for every
+    # command the body may ever call.
+    local -a records=()
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && records+=("$line")
+    done < <(link_registry)
+
+    local record
+    for record in "${records[@]}"; do
+        IFS=$'\t' read -r src dest mode <<< "$record"
         [[ -n "$dest" ]] || continue
         n="$(link_resolve "$src" "$dest")"
         src="${n%%$'\t'*}"
@@ -365,11 +553,14 @@ link_setup() {
         case "$rc" in
             "$LINK_CREATED") created=$((created + 1)) ;;
             "$LINK_EXISTS")  kept=$((kept + 1)) ;;
-            "$LINK_BLOCKED")    log_warn "In the way: $dest (not a symlink) — left untouched"; blocked=$((blocked + 1)) ;;
+            "$LINK_BLOCKED")
+                LINK_SETUP_BLOCKED+=("$dest")
+                blocked=$((blocked + 1))
+                ;;
             "$LINK_MISSING_SRC") missing_src=$((missing_src + 1)) ;;
             *) blocked=$((blocked + 1)) ;;
         esac
-    done < <(link_registry)
+    done
 
     # Global Git hooks must stay executable.
     if [[ -d "$XDG_CONFIG_HOME/git/hooks" ]]; then
@@ -398,6 +589,23 @@ link_setup() {
 
     log_success "Links: $created created, $kept already correct."
     LINK_SETUP_PENDING=$((blocked + wrong_target + missing_src))
+
+    # A file-level registry turns a legacy directory link into one blocked
+    # record per file underneath it. Printing every one of them would bury the
+    # message, so list a few and count the rest; the migration step consumes
+    # the list itself (LINK_SETUP_BLOCKED) to explain what it will do.
+    if [[ "${#LINK_SETUP_BLOCKED[@]}" -gt 0 ]]; then
+        local shown=0 p
+        for p in "${LINK_SETUP_BLOCKED[@]}"; do
+            [[ "$shown" -ge 3 ]] && break
+            log_warn "In the way: ${p#"$HOME"/} (not a symlink)"
+            shown=$((shown + 1))
+        done
+        if [[ "${#LINK_SETUP_BLOCKED[@]}" -gt "$shown" ]]; then
+            log_info "…and $(( ${#LINK_SETUP_BLOCKED[@]} - shown )) more."
+        fi
+    fi
+
     if [[ "$LINK_SETUP_PENDING" -gt 0 ]]; then
         log_warn "$LINK_SETUP_PENDING path(s) need your decision — run: $SCRIPT_NAME config sync"
     fi

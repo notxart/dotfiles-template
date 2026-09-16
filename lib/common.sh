@@ -96,6 +96,39 @@ log_warn()    { printf "  ${CLR_YELLOW}⚠ %s${CLR_RESET}\n" "$1"; }
 log_error()   { printf "\n${CLR_RED}Error: %s${CLR_RESET}\n" "$1" >&2; }
 
 # ==============================================================================
+# Interaction
+#
+# Every prompt in this project is fail-closed: when there is no terminal to ask
+# on, the answer is the safe one (skip), never the destructive one. Automation
+# must never be able to trigger a file move by accident.
+# ==============================================================================
+
+is_tty() { [[ -t 0 && -t 1 ]]; }
+
+# confirm <question> [default y|n]
+# Returns 0 for yes, 1 for no. Without a TTY it returns the DEFAULT without
+# asking, so a piped run can never block and never silently accepts.
+confirm() {
+    local question="$1" default="${2:-n}" reply
+    if [[ "${ASSUME_YES:-0}" -eq 1 ]]; then
+        return 0
+    fi
+    if ! is_tty; then
+        [[ "$default" == "y" ]]
+        return
+    fi
+    local hint="[y/N]"
+    [[ "$default" == "y" ]] && hint="[Y/n]"
+    printf '  %s %s ' "$question" "$hint" >&2
+    read -r reply || reply=""
+    [[ -z "$reply" ]] && reply="$default"
+    case "$reply" in
+        [yY]|[yY][eE][sS]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# ==============================================================================
 # System & Version Utilities
 # ==============================================================================
 

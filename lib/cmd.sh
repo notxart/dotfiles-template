@@ -68,6 +68,10 @@ parse_args() {
                 log_info "Option enabled: DeepSeek Harness"
                 shift
                 ;;
+            -y|--yes)
+                ASSUME_YES=1
+                shift
+                ;;
             -h|--help)
                 show_help
                 exit 0
@@ -122,6 +126,23 @@ cmd_install() {
     fi
 
     configure_fd_alias
+
+    # Convert legacy directory-level links BEFORE linking. With the file-level
+    # registry, every path underneath such a link resolves to a regular file
+    # and is therefore reported as blocked; the migration is what makes those
+    # paths linkable. It runs before link_setup so the same run can finish the
+    # job, and it is a no-op on a machine that never had directory links.
+    if migrate_needed; then
+        migrate_print_plan
+        if [[ "${ASSUME_YES:-0}" -eq 1 ]]; then
+            migrate_execute || return 1
+        elif is_tty && confirm "Convert these directory links now?" "y"; then
+            migrate_execute || return 1
+        else
+            log_warn "Skipped. Links stay blocked until you re-run and accept the conversion."
+        fi
+    fi
+
     link_setup
     configure_gpg
 
