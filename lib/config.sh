@@ -75,6 +75,29 @@ config_status() {
         done <<< "$loops"
     fi
 
+    # The repository's OWN tracked git configuration, which is the file most
+    # likely to carry a secret by accident: it is synced to every machine the
+    # user owns, and `credential.helper = store` or a pasted token would be
+    # published the moment this repository is. Checked here rather than in
+    # `install` because it is a property of the repository, not of the machine,
+    # and this is the command a user runs to ask "is anything wrong?".
+    local git_conf leak line kind detail
+    for git_conf in "$SCRIPT_DIR"/config/git/*.ini; do
+        [[ -f "$git_conf" ]] || continue
+        leak="$(scan_credential_leaks "$git_conf" || true)"
+        [[ -n "$leak" ]] || continue
+        log_step "Credential Risk in the Repository"
+        while IFS=$'\t' read -r line kind detail; do
+            [[ -n "$kind" ]] || continue
+            printf '  %s:%s  %s\n' "${git_conf#"$SCRIPT_DIR"/}" "$line" "$kind"
+            printf '      %s\n' "$detail"
+            CONFIG_STATUS_ISSUES=$((CONFIG_STATUS_ISSUES + 1))
+        done <<< "$leak"
+        log_warn "This file is tracked and synced to every machine you own."
+        log_info "Use a credential helper that keeps secrets outside the file,"
+        log_info "such as: helper = !gh auth git-credential"
+    done
+
     log_step "Result"
     if [[ "$CONFIG_STATUS_ISSUES" -eq 0 ]]; then
         log_success "All links healthy; nothing to reconcile."

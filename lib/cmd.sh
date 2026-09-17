@@ -123,7 +123,10 @@ cmd_install() {
     ensure_tool_version "starship" "starship" "1.20.0" "install_starship_fallback"
 
     if [[ "$FLAG_GIT_TUI" -eq 1 ]]; then
-        ensure_tool_version "hunk" "hunk" "0.19.0" "install_hunk_fallback"
+        # 0.20 is the floor because it is where `hunk update` appears. Asking for
+        # anything older installs a hunk that cannot keep itself current, which
+        # is the opposite of what a toolchain pin is for.
+        ensure_tool_version "hunk" "hunk" "0.20.0" "install_hunk_fallback"
         ensure_tool_version "lazygit" "lazygit" "0.44.0" "install_lazygit_fallback"
     fi
 
@@ -152,10 +155,19 @@ cmd_install() {
     link_setup
     configure_gpg
 
-    if [[ "$FLAG_GIT_TUI" -eq 0 || "$FLAG_WITH_DSH" -eq 0 ]]; then
+    # Only when the feature really is missing. The condition used to be `||`, so
+    # a machine that had asked for one of the two was told about both — advice to
+    # enable what was already enabled.
+    if [[ "$FLAG_GIT_TUI" -eq 0 && "$FLAG_WITH_DSH" -eq 0 ]]; then
         printf "\n"
         log_info "Tip: Run with '--with-git-tui' to enable the Lazygit/Hunk stack."
         log_info "     Run with '--with-dsh' to deploy the DeepSeek Harness ecosystem."
+    elif [[ "$FLAG_GIT_TUI" -eq 0 ]]; then
+        printf "\n"
+        log_info "Tip: Run with '--with-git-tui' to add the Lazygit/Hunk stack."
+    elif [[ "$FLAG_WITH_DSH" -eq 0 ]]; then
+        printf "\n"
+        log_info "Tip: Run with '--with-dsh' to add the DeepSeek Harness ecosystem."
     fi
 
     log_step "Dotfiles Setup Completed Successfully"

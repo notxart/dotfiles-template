@@ -81,14 +81,18 @@ install_starship_fallback() {
 }
 
 ensure_node_runtime() {
+    # The floor is set by what the tools actually declare. `hunkdiff` requires
+    # Node >= 22, so an 18-or-20 runtime installs hunk and then cannot run it.
+    local node_floor=22
+
     if command_exists node; then
         local node_major
         node_major="$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
-        if [[ -n "$node_major" ]] && [[ "$node_major" -ge 18 ]] 2>/dev/null; then
-            log_success "Node.js $(node --version 2>/dev/null) detected (>= 18)."
+        if [[ -n "$node_major" ]] && [[ "$node_major" -ge "$node_floor" ]] 2>/dev/null; then
+            log_success "Node.js $(node --version 2>/dev/null) detected (>= $node_floor)."
             return 0
         fi
-        log_warn "Detected Node.js $(node --version 2>/dev/null || printf 'unknown') is older than 18."
+        log_warn "Detected Node.js $(node --version 2>/dev/null || printf 'unknown') is older than $node_floor."
     fi
 
     log_info "Provisioning Node.js LTS via pnpm runtime..."
@@ -127,6 +131,11 @@ install_hunk_fallback() {
         log_info "Symlinked $hunk_bin to ~/.local/bin/hunk"
     fi
     log_success "Hunk installed."
+    # Said out loud because it changes how this installation is maintained: a
+    # standalone hunk is not one of the installs `hunk update` recognises, so it
+    # will keep reporting itself as current while staying where it is.
+    log_warn "This is a standalone install: 'hunk update' may not recognise it."
+    log_info "Update it with '${SCRIPT_NAME:-manager.sh} update --only hunk', which re-runs this installer."
 }
 
 install_lazygit_fallback() {
@@ -136,30 +145,68 @@ install_lazygit_fallback() {
     case "$(uname -s)" in
         Linux)  os="linux" ;;
         Darwin) os="darwin" ;;
-        *) log_error "Unsupported OS for Lazygit manual build."; exit 1 ;;
+        *)
+            log_error "Unsupported OS for Lazygit: $(uname -s)"
+            log_info "Lazygit publishes Linux and macOS builds; on anything else, use its package."
+            return 1
+            ;;
     esac
 
+    # Asset names, measured against the v0.65.1 release: lazygit publishes
+    # exactly x86_64, arm64, armv6 and 32-bit builds for those systems, all
+    # lowercase. Two of these mappings are not guessable from `uname -m`: there
+    # is no armv7 build (the armv6 one runs on armv7 hardware), and 32-bit x86 is
+    # spelled `32-bit`, not `386`.
     case "$(uname -m)" in
-        x86_64|amd64)   arch="x86_64" ;;
-        aarch64|arm64)  arch="arm64" ;;
-        *) log_error "Unsupported CPU architecture for Lazygit manual build."; exit 1 ;;
+        x86_64|amd64)        arch="x86_64" ;;
+        aarch64|arm64)       arch="arm64" ;;
+        armv6l|armv6)        arch="armv6" ;;
+        armv7l|armv7)        arch="armv6" ;;
+        i386|i486|i586|i686) arch="32-bit" ;;
+        *)
+            log_error "Unsupported CPU architecture for Lazygit: $(uname -m)"
+            log_info "Available builds: x86_64, arm64, armv6, 32-bit."
+            return 1
+            ;;
     esac
 
-    local release_url
-    release_url="$(curl -fsSL https://api.github.com/repos/jesseduffield/lazygit/releases/latest \
-        | grep -oE "\"browser_download_url\": \"[^\"]*lazygit_[0-9.]+_${os}_${arch}\\.tar\\.gz\"" \
-        | head -n1 | cut -d'"' -f4)"
-
-    if [[ -z "$release_url" ]]; then
-        log_error "Failed to resolve Lazygit release artifact URL for ${os}_${arch}."
-        exit 1
-    fi
-
+    local asset="lazygit_*_${os}_${arch}.tar.gz"
     local tmp_dir
     tmp_dir="$(create_temp_dir)"
 
-    curl -fsSL "$release_url" -o "$tmp_dir/lazygit.tar.gz" || { log_error "Lazygit download failed."; exit 1; }
-    tar -xzf "$tmp_dir/lazygit.tar.gz" -C "$tmp_dir" || { log_error "Lazygit extraction failed."; exit 1; }
+    # gh first: it downloads by asset pattern through the user's existing GitHub
+    # login, so nothing here depends on the shape of the release JSON, and it
+    # carries no rate limit for the anonymous case. The API path below is the
+    # fallback for a machine without gh or without a login.
+    if command_exists gh && gh auth status >/dev/null 2>&1; then
+        log_info "Downloading ${asset} with gh..."
+        gh release download --repo jesseduffield/lazygit --pattern "$asset" \
+            --dir "$tmp_dir" --clobber >/dev/null 2>&1 \
+            || log_warn "gh could not fetch the release; falling back to the GitHub API."
+    else
+        log_info "gh is unavailable or not authenticated; using the GitHub API."
+    fi
+
+    if ! ls "$tmp_dir"/lazygit_*.tar.gz >/dev/null 2>&1; then
+        local release_url
+        release_url="$(curl -fsSL https://api.github.com/repos/jesseduffield/lazygit/releases/latest \
+            | grep -oE "\"browser_download_url\": \"[^\"]*lazygit_[^\"]*_${os}_${arch}\\.tar\\.gz\"" \
+            | head -n1 | cut -d'"' -f4)"
+
+        if [[ -z "$release_url" ]]; then
+            log_error "Failed to resolve a Lazygit release artifact for ${os}_${arch}."
+            return 1
+        fi
+
+        curl -fsSL "$release_url" -o "$tmp_dir/lazygit.tar.gz" \
+            || { log_error "Lazygit download failed."; return 1; }
+    fi
+
+    local archive
+    archive="$(ls "$tmp_dir"/lazygit_*.tar.gz 2>/dev/null | head -n1)"
+    [[ -n "$archive" ]] || archive="$tmp_dir/lazygit.tar.gz"
+
+    tar -xzf "$archive" -C "$tmp_dir" || { log_error "Lazygit extraction failed."; return 1; }
 
     mkdir -p "$HOME/.local/bin"
     install -m 755 "$tmp_dir/lazygit" "$HOME/.local/bin/lazygit"
@@ -169,8 +216,6 @@ install_lazygit_fallback() {
 install_pnpm() {
     log_step "Verifying pnpm Infrastructure (Standalone Native)"
 
-    local pnpm_version="${PNPM_VERSION:-12.0.0-rc.9}"
-
     if command_exists pnpm; then
         local existing_pnpm_version
         existing_pnpm_version="$(pnpm --version 2>/dev/null || true)"
@@ -179,8 +224,26 @@ install_pnpm() {
         if [[ -n "$existing_pnpm_version" ]] && compare_versions_lt "$existing_pnpm_version" "11"; then
             log_warn "Existing pnpm $existing_pnpm_version is below 11 — 'pnpm runtime' may be unavailable."
         fi
+        log_info "To move it to the current release: ${SCRIPT_NAME:-manager.sh} update --only pnpm"
         return 0
     fi
+
+    install_pnpm_standalone
+}
+
+# install_pnpm_standalone — run the official installer, whether or not pnpm is
+# already present.
+#
+# `install` calls this only when pnpm is missing. `update` calls it as the
+# fallback when `pnpm self-update` fails, which is the case where re-running the
+# installer is the only way back to a working pnpm — so this cannot be folded
+# into install_pnpm, whose first act is to return early when pnpm exists.
+install_pnpm_standalone() {
+    # A bare major, not a full version: the installer resolves it through the
+    # `latest-<major>` dist-tag (falling back to `next-<major>` before a new
+    # major is promoted), so the pin follows the stable release line instead of
+    # freezing at whatever was current the day this was written.
+    local pnpm_version="${PNPM_VERSION:-12}"
 
     local fake_home
     fake_home="$(create_temp_dir)"
@@ -221,11 +284,14 @@ install_dsh() {
     fi
 
     if ! ensure_node_runtime; then
-        log_error "A valid Node.js runtime (>= 18) is required for DeepSeek Harness."
+        log_error "A valid Node.js runtime (>= 22) is required for DeepSeek Harness."
         exit 1
     fi
 
-    if ! pnpm add -g @deepseek-ai/dsh; then
+    # @latest, explicitly. Without a tag pnpm resolves the `latest` dist-tag
+    # anyway, but saying it means the command in the log is the same one `update`
+    # issues, so the two paths cannot drift apart.
+    if ! pnpm add -g @deepseek-ai/dsh@latest; then
         log_error "DeepSeek Harness global package installation failed."
         exit 1
     fi

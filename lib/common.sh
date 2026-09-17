@@ -172,16 +172,30 @@ compare_versions_lt() {
     [[ "$smallest" == "$v1" ]]
 }
 
+# get_installed_version <cmd> — the version of the binary this shell would run.
+#
+# The search order is the order the shell resolves: pnpm's global bin first,
+# because this repository installs its tools there and puts that directory ahead
+# of everything else on PATH; then ~/.local/bin; then whatever PATH finds.
+# Reading ~/.local/bin first, as this used to, could report a stale copy that
+# nothing would execute, and made install act on a version the user never sees.
 get_installed_version() {
     local cmd="$1"
-    local local_bin="$HOME/.local/bin/$cmd"
-    local target_cmd="$cmd"
+    local target_cmd=""
+    local candidate
+    local pnpm_bin="${PNPM_HOME:-$HOME/.local/share/pnpm}/bin/$cmd"
 
-    if [[ -x "$local_bin" ]]; then
-        target_cmd="$local_bin"
-    elif ! command_exists "$cmd"; then
-        return 1
+    for candidate in "$pnpm_bin" "$HOME/.local/bin/$cmd"; do
+        if [[ -x "$candidate" ]]; then
+            target_cmd="$candidate"
+            break
+        fi
+    done
+
+    if [[ -z "$target_cmd" ]]; then
+        target_cmd="$(command -v "$cmd" 2>/dev/null || true)"
     fi
+    [[ -n "$target_cmd" ]] || return 1
 
     local output
     output=$(LC_ALL=C "$target_cmd" --version 2>&1 | head -n1)

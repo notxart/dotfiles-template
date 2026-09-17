@@ -164,6 +164,55 @@ scan_content_risk() {
     grep -nE '/(home|Users)/[^"[:space:]]+' "$path" 2>/dev/null | head -n2 | while IFS= read -r hit; do
         printf 'absolute-path\t%s\n' "${hit:0:120}"
     done
+    # "Nothing found" is a result, not a failure. Without this the function
+    # returns the status of its last grep — 1 when it matched nothing — and every
+    # caller that captures the output with $( ) inherits that status. Under
+    # `set -e` an assignment from a command substitution takes the status of the
+    # substitution, so a clean file aborted the whole command.
+    return 0
+}
+
+# scan_redact <text> — keep a finding readable, remove the secret from it.
+#
+# The check below is about credentials, and a check that prints the credential
+# it found has moved the leak rather than reported it: this output goes to a
+# terminal, a scrollback buffer and often a pasted issue. The line number and
+# the shape of the match are what a reader needs; the value is not.
+scan_redact() {
+    printf '%s' "$1" \
+        | sed -E \
+            -e 's/(gh[pousr]_)[A-Za-z0-9]+/\1***/g' \
+            -e 's/(github_pat_)[A-Za-z0-9_]+/\1***/g' \
+            -e 's/((token|password|passwd|secret|api[_-]?key)[[:space:]]*[=:][[:space:]]*).*/\1***/I'
+}
+
+# scan_credential_leaks <path> — print "line<TAB>kind" for content that must not
+# be in a tracked file.
+#
+# Narrower than scan_content_risk on purpose. That one is a hint shown while
+# adopting an unknown file, where a false positive costs a second look. This one
+# runs on the repository's own tracked configuration and is meant to be believed,
+# so it looks for two things that are unambiguous: a credential helper that
+# stores secrets on disk, and a token-shaped string.
+scan_credential_leaks() {
+    local path="$1"
+    [[ -f "$path" ]] || return 0
+
+    # Two statements rather than one pattern: the messages differ, and mixing
+    # them would produce "credential" for both a helper name (not a secret) and
+    # a token (one).
+    grep -nEi '^[[:space:]]*helper[[:space:]]*=[[:space:]]*(store|cache)' "$path" 2>/dev/null \
+        | head -n3 | while IFS= read -r hit; do
+            printf '%s\tstored-credential-helper\t%s\n' "${hit%%:*}" "$(scan_redact "$hit")"
+        done
+
+    grep -nE '(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|BEGIN [A-Z ]*PRIVATE KEY)' "$path" 2>/dev/null \
+        | head -n3 | while IFS= read -r hit; do
+            printf '%s\tsecret-token\t%s\n' "${hit%%:*}" "$(scan_redact "$hit")"
+        done
+
+    # Same reason as scan_content_risk: no findings is not a failure.
+    return 0
 }
 
 # scan_size_note <path> — a human-readable size, used in the summary table.

@@ -42,6 +42,7 @@ UPDATE_MECH_KIND=""
 UPDATE_MECH_DESC=""
 UPDATE_MECH_CMD=()
 UPDATE_MECH_PKG=""
+UPDATE_MECH_FALLBACK=""
 
 # tool | distribution package | self-update command | fallback installer
 #
@@ -49,11 +50,15 @@ UPDATE_MECH_PKG=""
 # hunk and dsh are installed through it. An empty field means that mechanism
 # does not exist for that tool.
 #
+# A row may carry both a self-updater and a fallback. That pairing is not
+# redundant: `pnpm self-update` is the right way to move pnpm and cannot repair
+# a broken one, so a failure falls through to the installer that put it there.
+#
 # The distribution package column is empty for node: the name differs across
 # distributions (nodejs, node) and install provisions node through pnpm, so a
 # system-owned node is reported rather than upgraded under a guessed name.
 readonly -a UPDATE_TABLE=(
-    "pnpm||pnpm self-update|"
+    "pnpm||pnpm self-update|install_pnpm_standalone"
     "node||pnpm runtime set node lts -g|"
     "fzf|fzf||install_fzf_fallback"
     "starship|starship||install_starship_fallback"
@@ -184,19 +189,37 @@ update_is_pnpm_managed() {
     [[ -n "$path" && ( "$path" == "${PNPM_HOME:-$HOME/.local/share/pnpm}"/* ) ]]
 }
 
+# update_hunk_is_standalone — true when hunk came from this repository's
+# standalone installer rather than from a package manager.
+#
+# That installer places hunk under $XDG_DATA_HOME/hunk and points
+# ~/.local/bin/hunk at it, so the command the shell finds is the SYMLINK, not
+# the file. The comparison therefore has to follow it: testing the link's own
+# path would classify every real standalone install as a package-manager one,
+# and `hunk update` does not recognise a location it did not create.
+update_hunk_is_standalone() {
+    local path resolved
+    path="$(command -v "$1" 2>/dev/null || true)"
+    [[ -n "$path" ]] || return 1
+    resolved="$(readlink -f "$path" 2>/dev/null || printf '%s' "$path")"
+    [[ "$resolved" == "${XDG_DATA_HOME:-$HOME/.local/share}/hunk/bin/"* ]]
+}
+
 # update_self_applicable <tool> — whether the tool's own updater applies here.
 #
-# Two tools cannot answer that from the table alone. node is provisioned by pnpm
-# only when pnpm manages it; upgrading a distribution's node through pnpm would
-# create a second runtime that quietly takes precedence. hunk gained its own
-# updater in 0.20, so an older hunk is asked rather than assumed — and the
-# answer is cached, because the plan, the command list and the run each resolve
-# the same tool.
+# Three tools cannot answer that from the table alone. node is provisioned by
+# pnpm only when pnpm manages it; upgrading a distribution's node through pnpm
+# would create a second runtime that quietly takes precedence. hunk gained its
+# own updater in 0.20, so an older hunk is asked rather than assumed — and a
+# standalone hunk is excluded even when it is new enough, because its location
+# is one `hunk update` will not touch. The answer is cached: the plan, the
+# command list and the run all resolve the same tool.
 update_self_applicable() {
     case "$1" in
         node) update_is_pnpm_managed node ;;
         hunk)
             command_exists hunk || return 1
+            update_hunk_is_standalone hunk && return 1
             if [[ -z "${UPDATE_HUNK_SELF:-}" ]]; then
                 if hunk update --help >/dev/null 2>&1; then
                     UPDATE_HUNK_SELF=1
@@ -213,17 +236,16 @@ update_self_applicable() {
 
 # update_pm_state — establish package-manager state WITHOUT prompting.
 #
-# detect_environment is allowed to ask for a password because install runs when
-# the user has just asked for one thing. update runs a whole toolchain in a row,
-# where a prompt has no context, so the state is taken only when elevation is
-# already possible: sudo that does not need a password, or Homebrew.
+# Both halves live in lib/packages.sh: detection answers which package manager
+# this is, and acquire_privileges --non-interactive answers whether packages can
+# be installed without asking. That flag is the whole point: `update` runs a
+# whole toolchain in a row, so a password prompt arriving in the middle of it
+# would have no context.
 update_pm_state() {
     [[ "$UPDATE_PM_READY" -eq 1 ]] && return 0
     UPDATE_PM_READY=1
-    if ! command_exists brew && ! { command_exists sudo && sudo -n true 2>/dev/null; }; then
-        return 0
-    fi
     detect_environment >/dev/null 2>&1 || true
+    acquire_privileges --non-interactive >/dev/null 2>&1 || true
     return 0
 }
 
@@ -252,6 +274,9 @@ update_pm_refresh_once() {
 #   2. the distribution's package manager, when the distribution owns the file
 #      and elevation is already available.
 #   3. this repository's installer, for everything installed under $HOME.
+#
+# A tool may also carry a fallback alongside a self-updater, which update_one
+# reaches for only when the first attempt fails.
 update_resolve() {
     local tool="$1" row candidate pkg self fallback
 
@@ -259,6 +284,7 @@ update_resolve() {
     UPDATE_MECH_DESC=""
     UPDATE_MECH_CMD=()
     UPDATE_MECH_PKG=""
+    UPDATE_MECH_FALLBACK=""
 
     row=""
     for candidate in "${UPDATE_TABLE[@]}"; do
@@ -275,6 +301,7 @@ update_resolve() {
 
     IFS='|' read -r _ pkg self fallback <<< "$row"
     UPDATE_MECH_PKG="$pkg"
+    UPDATE_MECH_FALLBACK="$fallback"
 
     if ! command_exists "$tool"; then
         UPDATE_MECH_KIND="missing"
@@ -357,6 +384,17 @@ update_one() {
             ( "${UPDATE_MECH_CMD[@]}" ) || rc=$?
             ;;
     esac
+
+    # A tool that carries both mechanisms gets one second chance. `pnpm
+    # self-update` is the right way to move a working pnpm and cannot repair a
+    # broken one; the installer that put it there can. Without this, a failed
+    # self-update is reported as a tool that could not be updated when a way to
+    # update it was sitting one column away in the table.
+    if [[ "$rc" -ne 0 && -n "$UPDATE_MECH_FALLBACK" && "$UPDATE_MECH_KIND" != "fallback" ]]; then
+        log_warn "$tool: ${UPDATE_MECH_DESC%% *} failed; retrying with $UPDATE_MECH_FALLBACK."
+        rc=0
+        ( "$UPDATE_MECH_FALLBACK" ) || rc=$?
+    fi
 
     after="$(update_version "$tool")"
 
