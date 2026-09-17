@@ -31,8 +31,8 @@ rm -rf "$RUN"
 mkdir -p "$RUN/home" "$RUN/bin" "$RUN/repo"
 
 # --- stage the repository (source of truth copied in, so the run is hermetic) --
-cp -a "$REPO_ROOT"/{lib,manager.sh,install.sh,skills,config,.bashrc,.bash_profile} "$RUN/repo/" 2>/dev/null
-chmod +x "$RUN/repo/manager.sh" "$RUN/repo/install.sh"
+cp -a "$REPO_ROOT"/{lib,manager.sh,skills,config,.bashrc,.bash_profile} "$RUN/repo/"
+chmod +x "$RUN/repo/manager.sh"
 
 # --- stubs: privileged commands do nothing ------------------------------------
 printf '#!/bin/sh\nexit 0\n' > "$RUN/bin/sudo"

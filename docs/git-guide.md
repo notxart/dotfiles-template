@@ -66,6 +66,10 @@ The project includes a hardened `config/git/config.ini`. Key features:
   that chain `.git/hooks/<hook>.local`. Without a `.local` hook they are
   inert, so existing per-repo hooks keep working under the global `hooksPath`.
 
+Both the hook and `core.editor` apply the same wrapping rules to the same
+message, so a commit that opens an editor is formatted once on the way in and
+again on save without changing the result.
+
 All hooks are inert by default; the AI draft flow only activates when an agent
 writes `.git/AI_COMMIT_MSG` (see the `git-commit-architect` skill).
 
@@ -80,7 +84,7 @@ writes `.git/AI_COMMIT_MSG` (see the `git-commit-architect` skill).
 
 - `git ds`: diff of staged changes. `git dw`: whitespace-insensitive diff.
 - `git hdiff`: diff through the Hunk pager (requires `hunk`, installed with
-  `./install.sh --with-git-tui`); falls back to a plain `git diff` when
+  `./manager.sh install --with-git-tui`); falls back to a plain `git diff` when
   `hunk` is missing, so the alias never hard-errors.
 
 ### Rebase & Sync
@@ -131,10 +135,26 @@ specification.
 
 ### Wrapping
 
-Do **not** hand-wrap commit message lines: the editor wraps at 72 columns
-automatically (Vim `gitcommit` filetype, see `config/vim/vimrc`). Keep the
-subject under 50 characters and the body under ~72 characters per line as a
-soft habit.
+Do **not** hand-wrap commit message lines. Formatting is deterministic tooling's
+job, and it happens at two points that cover every way a message can be written:
+
+- `config/git/wrap-msg.sh` is set as `core.editor`, so it formats the message file
+  before the real editor opens. This is the only mechanism that covers
+  `git commit --amend` and `git rebase -i`, because neither runs
+  `prepare-commit-msg`. It reports an over-long subject rather than repairing it —
+  only the author knows what to cut — and it never splits a word or leaves
+  trailing whitespace.
+- The `prepare-commit-msg` hook formats the injected AI draft with the same
+  rules, so the buffer is already correct when the editor opens.
+- `config/vim/vimrc` rewraps on save for the `gitcommit` filetype, as a backstop
+  for lines typed by hand.
+
+Run `config/git/wrap-msg.sh --check < msg.txt` to validate a message without
+opening an editor: it exits non-zero and names the problem (subject over 50
+characters, a line over 72).
+
+Keep the subject under 50 characters and the body under ~72 as a habit — the
+tools enforce the second, and can only report the first.
 
 ### Example
 

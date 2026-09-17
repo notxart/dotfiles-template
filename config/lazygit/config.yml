@@ -2,7 +2,7 @@
 # Lazygit Integration Config for the AI HITL Flow
 # Path: ~/.config/lazygit/config.yml
 # Part of the optional AI review toolchain
-# (installed via './install.sh --with-git-tui')
+# (installed via './manager.sh install --with-git-tui')
 # =============================================
 
 gui:

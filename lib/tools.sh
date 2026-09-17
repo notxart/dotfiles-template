@@ -3,9 +3,9 @@
 # ==============================================================================
 # lib/tools.sh — Tool provisioning, version enforcement and per-tool fallbacks
 #
-# Moved verbatim from install.sh (Step 1: behavior unchanged). Steps 7–9 will
-# rework hunk (self-update aware), pnpm (stable pin), lazygit (gh download)
-# and the node runtime floor.
+# Moved verbatim from the original single-file installer (Step 1: unchanged).
+# hunk, pnpm, lazygit and the node floor were reworked in Step 8.
+
 # ==============================================================================
 
 ensure_tool_version() {
@@ -328,7 +328,7 @@ configure_gpg() {
 
         if [[ -n "$pinentry_program" ]]; then
             cat <<EOF > "$agent_conf"
-# Managed by dotfiles install.sh
+# Managed by dotfiles manager.sh
 # Pinentry program for GPG passphrase prompts (TUI/CLI friendly)
 pinentry-program $pinentry_program
 EOF

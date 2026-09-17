@@ -3,7 +3,7 @@
 # ==============================================================================
 # lib/shell.sh — Login shell management, Git feature validation, GPG hardening
 #
-# Moved verbatim from install.sh (Step 1: behavior unchanged).
+# Moved verbatim from the original single-file installer (Step 1: unchanged).
 # ==============================================================================
 
 check_git_version() {

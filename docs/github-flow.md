@@ -8,7 +8,7 @@ prepare commit drafts that you — and only you — review and sign.
 
 > **Prerequisites**: Git >= 2.37, a GPG key configured in
 > `config/git/config.ini`, and this repo's dotfiles installed. The AI parts
-> are optional (`./install.sh --with-git-tui --with-dsh`).
+> are optional (`./manager.sh install --with-git-tui --with-dsh`).
 
 ## Principles
 

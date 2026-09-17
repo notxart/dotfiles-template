@@ -18,11 +18,18 @@ You prepare everything; the human reviews, edits, and cryptographically signs.
    `$(git rev-parse --git-dir)/AI_COMMIT_MSG`. Never write it anywhere else,
    and never ask the user to copy-paste a message.
 3. **No character-level hard wrapping**: do NOT count characters or force line
-   breaks at 72 columns. Wrapping is deterministic tooling's job: the user's
-   Vim config (`config/vim/vimrc`) rewraps commit-message lines at 72 columns
-   **on save** (`BufWritePre`), so long body lines are fixed automatically
-   while the human reviews. Keep body lines reasonably short (< 72 chars) as
-   a soft habit, but never compute character lengths.
+   breaks at 72 columns. Wrapping is deterministic tooling's job, and it happens
+   without anyone remembering to run it. `config/git/wrap-msg.sh` is set as
+   `core.editor`, so the message file is formatted before the real editor opens —
+   this is the only path that also covers `git commit --amend` and
+   `git rebase -i`, neither of which runs `prepare-commit-msg`. The
+   `prepare-commit-msg` hook formats the injected draft with the same rules, and
+   `config/vim/vimrc` rewraps on save as a backstop. Keep body lines reasonably
+   short (< 72 chars) as a soft habit, but never compute character lengths.
+   Write the draft unwrapped: one paragraph or bullet per line, and let the
+   tooling decide where the breaks go. The one thing the tooling will not fix is
+   an over-long subject — it reports it instead, because only the author knows
+   what to cut — so keep that under 50 characters yourself.
 4. **No hallucination**: describe only changes actually present in the diff.
    If verification steps are unknown, write `N/A` instead of inventing them.
 5. **Language**: commit messages in professional English; conversational
@@ -129,7 +136,7 @@ Notes:
   `A` (Files panel — commit with AI draft injection) and `F` (safe force
   push `git pf`; `P` stays bound to lazygit's built-in normal Push) — all
   from the optional Git TUI toolchain installed by
-  `./install.sh --with-git-tui`.
+  `./manager.sh install --with-git-tui`.
 
 ## References
 
@@ -137,6 +144,8 @@ The repository documents the full workflow (human-facing):
 
 - `docs/github-flow.md` — step-by-step GitHub Flow guide (AI-assisted HITL).
 - `docs/git-guide.md` — configuration reference (aliases, hooks, conventions).
+- `docs/config-sync.md` — how the machine and the repository are reconciled,
+  and what `install` deliberately refuses to do.
 
 Locate them from the repo root — the skill directory may be symlinked into
 `$DSH_HOME/skills`, so never use relative paths from the skill file:

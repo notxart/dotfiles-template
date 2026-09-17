@@ -8,7 +8,7 @@
 # ==============================================================================
 
 # --- Script Location Bootstrap -------------------------------------------------
-# The entry point (manager.sh / install.sh) is expected to define SCRIPT_DIR.
+# The entry point (manager.sh) is expected to define SCRIPT_DIR.
 # When a module is sourced directly, derive the repo root from this file.
 if [[ -z "${SCRIPT_DIR:-}" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
