@@ -302,16 +302,21 @@ config_sync() {
     manifest_init
 
     # ---- 1. read-only scan -------------------------------------------------
-    local plan candidates
+    local plan candidates orphans
     plan="$(config_reconcile_items)"
     candidates="$(scan_config_candidates)"
+    # Records whose source is gone: the file was renamed or deleted in the
+    # repository. They are not a link to repair, they are a link to remove, and
+    # without this the destination keeps a dangling symlink for good.
+    orphans="$(link_find_orphans || true)"
 
-    local n_ident n_differ n_missing n_cand n_ignored
+    local n_ident n_differ n_missing n_cand n_ignored n_orphan
     n_ident="$(printf '%s\n'   "$plan" | grep -c '^blocked-identical' || true)"
     n_differ="$(printf '%s\n'  "$plan" | grep -c '^blocked-differs'   || true)"
     n_missing="$(printf '%s\n' "$plan" | grep -c '^missing'           || true)"
     n_cand="$(printf '%s\n'    "$candidates" | grep -c .              || true)"
     n_ignored="$(manifest_list ignore | grep -c . || true)"
+    n_orphan="$(printf '%s\n'  "$orphans" | grep -c .                 || true)"
 
     log_step "Reconciliation"
     log_info "Repository: $SCRIPT_DIR"
@@ -320,10 +325,12 @@ config_sync() {
     printf '  %-26s %s\n' "identical (safe to link)"  "$n_ident"
     printf '  %-26s %s\n' "conflicting files"        "$n_differ"
     printf '  %-26s %s\n' "missing links"            "$n_missing"
+    printf '  %-26s %s\n' "orphaned records"         "$n_orphan"
     printf '  %-26s %s\n' "new candidates"           "$n_cand"
     printf '  %-26s %s\n' "previously ignored"       "$n_ignored"
 
-    if [[ "$n_ident" -eq 0 && "$n_differ" -eq 0 && "$n_missing" -eq 0 && "$n_cand" -eq 0 ]]; then
+    if [[ "$n_ident" -eq 0 && "$n_differ" -eq 0 && "$n_missing" -eq 0 \
+          && "$n_cand" -eq 0 && "$n_orphan" -eq 0 ]]; then
         printf '\n'
         log_success "Nothing to reconcile."
         return 0
@@ -332,7 +339,8 @@ config_sync() {
     if [[ "$dry" -eq 1 ]]; then
         printf '\n'
         log_info "Dry run: no changes made."
-        config_sync_details "$plan" "$candidates"
+        config_sync_details "$plan" "$candidates" "$orphans"
+        link_prune_orphans --dry-run
         return 0
     fi
 
@@ -352,7 +360,7 @@ config_sync() {
         log_info "Run this in an interactive shell, or apply individual decisions:"
         log_info "  ${SCRIPT_NAME:-manager.sh} config adopt <path>"
         log_info "  ${SCRIPT_NAME:-manager.sh} config ignore <path>"
-        config_sync_details "$plan" "$candidates"
+        config_sync_details "$plan" "$candidates" "$orphans"
         return 2
     else
         log_info "[a] apply the safe changes (link identical files, create missing links)"
@@ -362,7 +370,7 @@ config_sync() {
         printf '  Choose [a/d/q]: ' >&2
         read -r answer || answer="q"
         case "$answer" in
-            d|D) config_sync_details "$plan" "$candidates"
+            d|D) config_sync_details "$plan" "$candidates" "$orphans"
                  printf '\n'
                  printf '  Apply the safe changes now? [y/N]: ' >&2
                  read -r answer || answer="n"
@@ -409,6 +417,14 @@ config_sync() {
         esac
     done <<< "$plan"
 
+    # Orphaned records are removed as part of the same decision. link_prune_orphans
+    # only ever removes a destination that is still a symlink INTO this
+    # repository, so this cannot take away a real file, and a link whose source
+    # was deleted from the repository is broken either way.
+    if [[ "$n_orphan" -gt 0 ]]; then
+        link_prune_orphans
+    fi
+
     printf '\n'
     log_success "Reconciliation complete."
     [[ "$n_differ" -gt 0 ]] && log_warn "$n_differ conflicting file(s) still need your decision."
@@ -416,9 +432,21 @@ config_sync() {
     return 0
 }
 
-# config_sync_details <plan> <candidates> — the full picture, read-only.
+# config_sync_details <plan> <candidates> [orphans] — the full picture, read-only.
 config_sync_details() {
-    local plan="$1" candidates="$2" kind src dest
+    local plan="$1" candidates="$2" orphans="${3:-}" kind src dest
+
+    if [[ -n "$orphans" ]]; then
+        printf '\n'
+        log_step "Records Whose Source Is Gone"
+        log_info "The file was renamed or deleted in the repository. The link it"
+        log_info "left behind is dangling, and applying the changes removes it."
+        local dest src reason
+        while IFS=$'\t' read -r dest src reason; do
+            [[ -n "$dest" ]] || continue
+            printf '  %-18s %s  (source: %s)\n' "$reason" "$dest" "$src"
+        done <<< "$orphans"
+    fi
 
     if [[ -n "$plan" ]]; then
         printf '\n'
@@ -461,6 +489,16 @@ config_sync_details() {
 cmd_config() {
     local sub="${1:-status}"
     [[ $# -gt 0 ]] && shift
+
+    # The registry is flag-dependent: hunk, lazygit and the skills bundle are
+    # entries only on a machine that opted into them, and install records that
+    # choice in the manifest. Every config subcommand therefore has to resolve
+    # the flags BEFORE it reads the registry, or a machine with the Git TUI stack
+    # installed is shown a registry that does not contain it — and the paths that
+    # need attention are exactly the ones that go missing.
+    init_xdg_env >/dev/null
+    manifest_init
+    resolve_feature_flags
 
     case "$sub" in
         status)  config_status ;;

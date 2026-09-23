@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Throwaway runs produced by tools/sandbox-check.sh.
+# Throwaway runs produced by sandbox-check.sh (repository root).
 # That tool installs into a fake HOME to prove the manager never touches your
 # real configuration; this is where it writes the run it leaves behind for
 # inspection (report.txt, stdout.clean, stderr.clean).

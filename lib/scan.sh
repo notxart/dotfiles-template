@@ -90,7 +90,15 @@ scan_config_candidates() {
         name="$(basename "$path")"
         scan_never_candidate "$name" && continue
         scan_is_managed "$path" && continue
-        scan_is_managed_parent "$path" && continue
+        # A directory that merely CONTAINS managed files is not itself a
+        # candidate, but it is still walked: the files inside it are reported
+        # or skipped one by one below. Skipping the whole directory here would
+        # hide exactly the files worth seeing — an application's own state
+        # beside hunk's config, or a user's extra file in ~/.config/git — and
+        # `scan_classify` exists to label those rather than to bury them. This
+        # became visible only once the registry stopped being flag-blind: an
+        # unmanaged ~/.config/hunk made its state.json a candidate, and a
+        # managed one silently stopped doing so.
         [[ -d "$path" && ! -L "$path" ]] || { printf '%s\n' "$path"; continue; }
         # A directory the repository does not manage: walk one level into it.
         local child

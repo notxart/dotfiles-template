@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# tests/run_in_sandbox.sh — End-to-end harness for the dotfiles manager
+# sandbox-check.sh — End-to-end harness for the dotfiles manager
 #
 # Runs ./manager.sh against a throwaway HOME with stubbed privileged commands
 # (sudo / apt-get) and stubbed tool binaries, so no system state is touched and
 # no package is ever installed for real.
 #
 # Usage:
-#   tests/run_in_sandbox.sh <case-name> [--second-clone]
+#   ./sandbox-check.sh <case-name> [--second-clone]
 #
 #   <case-name>       creates .sandbox-e2e/<case-name>/
 #   --second-clone    run twice from two different clones into the same HOME
@@ -21,8 +21,8 @@
 
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CASE="${1:?usage: run_in_sandbox.sh <case-name> [--second-clone]}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CASE="${1:?usage: sandbox-check.sh <case-name> [--second-clone]}"
 MODE="${2:-}"
 RUN="$REPO_ROOT/.sandbox-e2e/$CASE"
 PNPM_BIN="${PNPM_HOME_BIN:-$HOME/.local/share/pnpm/bin}"

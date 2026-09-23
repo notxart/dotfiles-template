@@ -146,6 +146,25 @@ Tools installed by a package manager are reported rather than shadowed, and no
 password is ever requested: `update` runs a whole toolchain in a row, so a prompt
 arriving in the middle of it would have no context.
 
+### Verifying the manager itself
+
+Two scripts at the repository root run the manager against a throwaway `$HOME`
+(created under `.sandbox-e2e/`, which is gitignored), so nothing on your own
+machine is touched:
+
+```sh
+./sandbox-check.sh <name>   # run an install and leave report.txt to inspect
+./acceptance-check.sh       # assert the fourteen documented behaviours
+```
+
+The first is for looking at what the manager did — the resulting links, the real
+directories under `~/.config`, the files it wrote under `~/.local`. The second is
+the acceptance matrix: fresh install, idempotent second install, an application's
+own file surviving, an interrupted link being repaired, the legacy
+directory-symlink migration, loop detection, every `config sync` verdict, a
+refused install when the manager and shell disagree, orphaned records, the
+manifest round-trip, the no-terminal refusal, and the seeded-file contract.
+
 ### Git Identity Setup
 
 This template uses a split-config approach for Git to separate personal and work identities.

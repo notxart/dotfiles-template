@@ -19,8 +19,11 @@
 #     own gitdir, so each worktree has an independent AI_COMMIT_MSG buffer.
 #
 # WRAPPING: the rules are INLINED below, and config/git/wrap-msg.sh carries the same
-# rules inline for the paths this hook never sees. tests/verify_step4_registry.sh
-# asserts the two produce byte-identical output.
+# rules inline for the paths this hook never sees. The duplication is deliberate
+# (see below), so the two copies have to be kept in step by hand — and
+# ./acceptance-check.sh asserts they produce byte-identical output, because a
+# message that changes shape depending on whether an agent wrote it is a bug
+# nobody would notice until it was in the log.
 #
 # Two things forced the rules to travel with their caller:
 #
