@@ -31,8 +31,16 @@ config_status() {
             continue
         fi
         health="$(link_health "$src" "$dest")"
+        # A seed destination holding a real file is the INTENDED end state: the
+        # file is copied once and belongs to the machine from then on, which is
+        # exactly why config_reconcile_items skips seed entries. Reporting it as
+        # blocked made a correctly installed machine look like it needed
+        # attention on every run, which is how a real warning gets ignored.
+        if [[ "$mode" == "seed" && "$health" == "$LINK_STATE_BLOCKED" ]]; then
+            health="seeded"
+        fi
         case "$health" in
-            "$LINK_STATE_OK")      n_ok=$((n_ok + 1)) ;;
+            "$LINK_STATE_OK"|seeded) n_ok=$((n_ok + 1)) ;;
             "$LINK_STATE_ABSENT")  n_absent=$((n_absent + 1)) ;;
             "$LINK_STATE_STALE")   n_stale=$((n_stale + 1)) ;;
             "$LINK_STATE_BLOCKED") n_blocked=$((n_blocked + 1)) ;;

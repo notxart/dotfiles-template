@@ -380,6 +380,19 @@ check "it stays a real file, not a link" "regular" \
     "$([[ -L "$XDG_CONFIG_HOME/git/work.ini" ]] && echo symlink || echo regular)"
 check "sync does not offer it as a conflict" "0" \
     "$(mgr "$SANDBOX/repo" config sync --dry-run | grep -c 'CONFLICT.*work\.ini')"
+# The other half of the seed contract: a real file there is the intended end
+# state, so status must not report the machine as needing attention because of
+# it. It did, on every run, and a warning that is always on is a warning nobody
+# reads.
+check "status calls it seeded, not blocked" "1" \
+    "$(mgr "$SANDBOX/repo" config status | grep -cE '^  seeded +.*work\.ini')"
+# And with nothing else outstanding — the conflict T13 deliberately left, and
+# the link T5 pointed at the second clone — a repaired machine reports no issues
+# at all. Both are put back to the single checkout this sandbox manages.
+rm -f "$XDG_CONFIG_HOME/lazygit/config.yml" "$XDG_CONFIG_HOME/vim/vimrc"
+mgr "$SANDBOX/repo" install --with-git-tui >/dev/null 2>&1
+rc=0; mgr "$SANDBOX/repo" config status > "$SANDBOX/t14status.out" 2>&1 || rc=$?
+check "a fully repaired machine reports no issues at all" "0" "$rc"
 
 echo
 echo "### Wrapping parity — the hook and the formatter must agree byte for byte"
