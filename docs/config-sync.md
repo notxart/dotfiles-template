@@ -162,6 +162,35 @@ cp -a "$XDG_STATE_HOME"/dotfiles/backups/<timestamp>/.config/starship.toml ~/.co
 - It will not reconcile a `seed` path. Those are copied once and belong to the
   machine afterwards.
 
+## Skills travel with the repository
+
+Agent skills are managed by the same registry, in a third location:
+`$DSH_HOME/skills/`. The arrangement decides whether a skill you write survives a
+move to another machine, so it is worth knowing.
+
+- The **canonical copy lives in this repository**, at `skills/<name>/SKILL.md`.
+  That is what gets committed, pushed and cloned onto the next machine.
+- `$DSH_HOME/skills/<name>/` is a **real directory containing links** to those
+  files, not a link to the directory. Anything written beside `SKILL.md` — a
+  scratch note, a cache an agent drops — therefore stays on the machine instead
+  of landing in the working tree. A directory link would carry all of it into the
+  repository.
+- The registry discovers `skills/*/` by itself, so a skill added to the
+  repository needs no edit anywhere: run `./manager.sh install` and its files are
+  linked.
+
+A skill written **directly into `$DSH_HOME/skills/`** is outside the repository
+and will not travel. Bring it in:
+
+```sh
+./manager.sh config adopt "$DSH_HOME/skills/<name>/SKILL.md"
+```
+
+`adopt` moves the file into `skills/<name>/` and links back to it, exactly as it
+does for a configuration file under `~/.config`, and the skill keeps working
+where it is. An agent working in this repository is told the same thing in
+`AGENTS.md`.
+
 ## Related
 
 - [README](../README.md) — installation, requirements, customization.

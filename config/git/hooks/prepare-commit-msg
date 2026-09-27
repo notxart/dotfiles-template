@@ -21,7 +21,7 @@
 # WRAPPING: the rules are INLINED below, and config/git/wrap-msg.sh carries the same
 # rules inline for the paths this hook never sees. The duplication is deliberate
 # (see below), so the two copies have to be kept in step by hand — and
-# ./acceptance-check.sh asserts they produce byte-identical output, because a
+# ./check.sh asserts they produce byte-identical output, because a
 # message that changes shape depending on whether an agent wrote it is a bug
 # nobody would notice until it was in the log.
 #
@@ -82,6 +82,13 @@ if [ -z "$COMMIT_SOURCE" ] && [ -f "$AI_MSG_FILE" ] && [ -s "$AI_MSG_FILE" ]; th
             print line
             next
         }
+        # An INDENTED line is a continuation of the item above, which is what
+        # this formatter produces for a bullet that had to be broken. Keeping
+        # the indent is what makes a second pass a no-op: the real commit path
+        # runs these rules twice (this hook, then config/git/wrap-msg.sh as
+        # core.editor), and a rule that stripped the indent would eat it on the
+        # second pass. The two copies of this program must stay identical.
+        if (line ~ /^[ \t]/) { print wrap("  ", "  ", line); next }
         if (line ~ /^- /) { print wrap("- ", "  ", substr(line, 3)); next }
         print wrap("", "", line)
     }

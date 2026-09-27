@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# acceptance-check.sh — The T1–T14 acceptance matrix.
+# check.sh — the repository's own verification, in one harness.
 #
-# sandbox-check.sh answers "what did the manager do to a throwaway HOME?" and
-# leaves a report to read. This one answers "does it behave the way it promises?"
-# and asserts it: fourteen scenarios a user actually meets, walked in order
-# against one sandbox that keeps its state between them.
+#   ./check.sh            the acceptance matrix: T1–T14, the wrapping-parity
+#                         guard, and the formatter guarantees. Exits non-zero
+#                         on the first thing that is not true.
+#   ./check.sh --report   one install against a throwaway HOME, then a report
+#                         of what it created. Exits 0; it is for looking, not
+#                         for judging.
 #
 #   T1  fresh install                  T8  local content wins (adopt)
 #   T2  second install is idempotent   T9  XDG mismatch refuses to install
@@ -15,16 +17,14 @@
 #   T6  loop symlinks are found        T13 no TTY changes nothing, exits 2
 #   T7  sync verdicts + fail-closed    T14 a seeded file is never overwritten
 #
-# Plus one guard that is not a scenario: the hook and wrap-msg.sh carry the same
-# wrapping rules inline and must produce byte-identical output.
-#
-# Usage: ./acceptance-check.sh
+# Nothing here touches the machine it runs on: HOME is a sandbox under
+# .sandbox-e2e/ (gitignored), and sudo, apt-get, the network and every tool the
+# manager would install are stubs that record their argv instead of running.
 # ==============================================================================
-
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SANDBOX="$REPO_ROOT/.sandbox-e2e/step10"
+SANDBOX="$REPO_ROOT/.sandbox-e2e/check"
 rm -rf "$SANDBOX"
 mkdir -p "$SANDBOX/home" "$SANDBOX/bin" "$SANDBOX/pmbin" "$SANDBOX/versions"
 
@@ -47,7 +47,10 @@ unset GNUPGHOME GIT_CONFIG_GLOBAL DSH_HOME 2>/dev/null || true
 stage_repo() {
     local dest="$1"
     mkdir -p "$dest"
-    cp -a "$REPO_ROOT"/{.git,lib,skills,config,.bashrc,.bash_profile,manager.sh} "$dest/"
+    # docs/ and AGENTS.md are staged too: the repository-rule guards below check
+    # the documents an agent is told to trust, and a guard that cannot find its
+    # subject would pass vacuously.
+    cp -a "$REPO_ROOT"/{.git,lib,skills,config,docs,.bashrc,.bash_profile,manager.sh,README.md,AGENTS.md} "$dest/"
     chmod +x "$dest/manager.sh"
 }
 
@@ -126,6 +129,69 @@ mgr() {
 link_count() { find "$HOME" -type l -not -path "$PNPM_HOME/*" -not -path "$HOME/.local/bin/*" 2>/dev/null | wc -l; }
 
 stage_repo "$SANDBOX/repo"
+
+# ==============================================================================
+# One harness, two questions.
+#
+#   ./check.sh            "does the manager behave the way it promises?" — the
+#                         acceptance matrix below; exits non-zero on failure.
+#   ./check.sh --report   "what did it actually do?" — one install, then a
+#                         topology report to read; exits 0.
+#
+# Both run against a throwaway HOME under .sandbox-e2e/ (gitignored) with
+# stubbed privileged commands and stubbed tools, so neither touches the machine
+# it runs on. They share this file because they shared a harness, and two
+# copies of the same setup drift: the copy that is not being exercised is the
+# one that rots.
+# ==============================================================================
+MODE="acceptance"
+case "${1:-}" in
+    ""|--acceptance) ;;
+    --report)        MODE="report" ;;
+    -h|--help)
+        printf 'usage: %s [--report]\n\n  (no flag)  run the acceptance assertions\n  --report   run one install and write .sandbox-e2e/check/report/report.txt\n' \
+            "$(basename "$0")"
+        exit 0
+        ;;
+    *) printf 'usage: %s [--report]\n' "$(basename "$0")" >&2; exit 2 ;;
+esac
+
+if [[ "$MODE" == "report" ]]; then
+    RUN="$SANDBOX/report"
+    mkdir -p "$RUN"
+    mgr "$SANDBOX/repo" install --with-git-tui --with-dsh > "$RUN/stdout.raw" 2> "$RUN/stderr.raw"
+    rc=$?
+    sed 's/\x1b\[[0-9;]*m//g' "$RUN/stdout.raw" > "$RUN/stdout.clean"
+    sed 's/\x1b\[[0-9;]*m//g' "$RUN/stderr.raw" > "$RUN/stderr.clean"
+    {
+        echo "exit_code=$rc"
+        echo
+        echo "=== everything the run asked the machine to do (all of it intercepted) ==="
+        sort "$STUB_LOG" 2>/dev/null | uniq -c | sort -rn | head -20
+        echo
+        echo "=== symlinks under \$HOME (dest -> src) ==="
+        find "$HOME" -type l -printf '%p -> %l\n' 2>/dev/null | sed "s|$HOME|~|g" | sort
+        echo
+        echo "=== entries directly under ~/.config (a SYMLINK here is the old shape) ==="
+        find "$HOME/.config" -mindepth 1 -maxdepth 1 -printf '%y %f\n' 2>/dev/null | sort
+        echo
+        echo "=== skill destinations (directory real, files linked) ==="
+        find "$HOME/.local/share/dsh/skills" -mindepth 1 -maxdepth 2 -printf '%y %p\n' 2>/dev/null \
+            | sed "s|$HOME|~|g" | sort
+        echo
+        echo "=== symlinks inside the repository (a loop would show up here) ==="
+        find "$SANDBOX/repo" -type l -printf '%p -> %l\n' 2>/dev/null \
+            | sed "s|$SANDBOX/repo/||" | sort
+        echo
+        echo "=== files written under ~/.local, outside the repository ==="
+        find "$HOME/.local" -mindepth 1 -maxdepth 3 -printf '%y %p\n' 2>/dev/null \
+            | sed "s|$HOME|~|g" | sort
+    } > "$RUN/report.txt"
+    printf 'sandbox : %s\n' "$SANDBOX"
+    printf 'exit    : %s\n' "$rc"
+    printf 'report  : %s\n' "$RUN/report.txt"
+    exit 0
+fi
 
 # ==============================================================================
 echo
@@ -420,6 +486,127 @@ check "the bullet keeps its continuation indent" "1" \
     "$(grep -c '^  indented under its marker' "$SANDBOX/expected.txt")"
 check "the trailer is not wrapped" "1" "$(grep -c '^Refs: #12$' "$SANDBOX/expected.txt")"
 rm -f "$SANDBOX/repo/.git/AI_COMMIT_MSG"
+
+echo
+echo "### Formatter guarantees — what the wrapping chain depends on"
+# The real commit path runs these rules TWICE (prepare-commit-msg on injection,
+# then wrap-msg.sh as core.editor) and a third time if Vim saves the buffer.
+# Idempotence is therefore not a nicety: without it the second pass rewrites what
+# the first produced, which it did for every bullet long enough to wrap — the
+# continuation came back with its indent stripped.
+WRAP="$SANDBOX/repo/config/git/wrap-msg.sh"
+printf 'fix(scope): a subject under fifty\n\nA paragraph that is one long line and must be wrapped by the tool at the seventy-two column limit.\n\n- a bullet that is one long line and must wrap with a two space continuation indent under its marker\n' > "$SANDBOX/guarantee.txt"
+"$WRAP" < "$SANDBOX/guarantee.txt" > "$SANDBOX/guarantee-1.txt" 2>/dev/null
+"$WRAP" < "$SANDBOX/guarantee-1.txt" > "$SANDBOX/guarantee-2.txt" 2>/dev/null
+check "formatting its own output changes nothing" "identical" \
+    "$(cmp -s "$SANDBOX/guarantee-1.txt" "$SANDBOX/guarantee-2.txt" && echo identical || echo different)"
+check "the bullet's continuation keeps its indent" "1" \
+    "$(grep -cE '^  [^ ]' "$SANDBOX/guarantee-1.txt")"
+check "no line exceeds 72 columns" "0" "$(awk 'length > 72' "$SANDBOX/guarantee-1.txt" | wc -l)"
+
+# A filter that printed nothing when it rejects an input would empty whatever the
+# caller redirected into, and callers do redirect: the pipe form is
+# `wrap-msg.sh < draft > message`, and core.editor rewrites the message file.
+printf 'feat(install): a subject deliberately far longer than the fifty character limit\n\nbody paragraph that must survive\n' > "$SANDBOX/reject.txt"
+rc=0
+"$WRAP" < "$SANDBOX/reject.txt" > "$SANDBOX/reject.out" 2> "$SANDBOX/reject.err" || rc=$?
+check "a rejected subject exits non-zero" "1" "$rc"
+check "and the whole message still reaches stdout" "3" "$(wc -l < "$SANDBOX/reject.out")"
+check "the subject survives" "1" "$(grep -c 'deliberately far longer' "$SANDBOX/reject.out")"
+check "the body survives" "1" "$(grep -c 'body paragraph that must survive' "$SANDBOX/reject.out")"
+check "and the reason is on stderr" "1" "$(grep -c 'subject is' "$SANDBOX/reject.err")"
+
+echo
+echo "### Repository rules — the promises the documents make"
+# config/vim/vimrc used to carry its own `fold -s -w 72`, and Vim's textwidth a
+# third reflow: three implementations of one convention, three results. Comments
+# may still name `fold` while explaining why it is gone, so this looks for an
+# INVOCATION (`^[^#]*fold `), not for the word.
+no_fold() {  # no_fold <path-in-repo> <comment-prefix-ERE>
+    grep -vE "^[[:space:]]*$2" "$SANDBOX/repo/$1" 2>/dev/null \
+        | grep -cE '(^|[^[:alnum:]_-])fold([^[:alnum:]_-]|$)'
+}
+check "no fold invocation in the formatter" "0" "$(no_fold config/git/wrap-msg.sh '#')"
+check "none in the commit hook"             "0" "$(no_fold config/git/hooks/prepare-commit-msg '#')"
+check "none in the vimrc either"            "0" "$(no_fold config/vim/vimrc '"')"
+check "the vimrc calls the repository formatter instead" "yes" \
+    "$(grep -q 'wrap-msg\.sh' "$SANDBOX/repo/config/vim/vimrc" && echo yes || echo no)"
+
+# An example that demonstrates a rule has to satisfy it: a reader — or an agent —
+# imitates what the example SHOWS, not what the surrounding prose says. So an
+# example that opens with a commit subject must keep that subject inside the
+# limit, and no example may contain a hand-wrapped paragraph, because that is the
+# shape the tooling then keeps and re-wraps around.
+subject_len() {  # subject_len <file> <fence-opener> — length of the first subject line
+    awk -v open="$2" '
+        $0 == open { inb = 1; next }
+        inb && $0 == "```" { exit }
+        inb && NF && $0 ~ /^[a-z]+(\(|:)/ { print length($0); exit }
+    ' "$SANDBOX/repo/$1"
+}
+wrapped_lines() {  # wrapped_lines <file> <fence-opener> — hand-wrapped continuations
+    # A continuation is a line that follows a line which did not end a sentence,
+    # where neither line is a list item, a heading, a placeholder, or the block's
+    # own subject line. Placeholders (`<Component>: <description>`) are
+    # single-line by construction and end in `>`, so counting them as prose would
+    # report every template as hand-wrapped.
+    awk -v open="$2" '
+        $0 == open { inb = 1; is_first = 1; have_prev = 0; prev = ""; prev_heading = 0; prev_first = 0; next }
+        inb && $0 == "```" { exit }
+        !inb { next }
+        {
+            line = $0
+            sub(/[ \t]+$/, "", line)
+            if (line == "") next
+            trimmed = line
+            sub(/^[ \t]+/, "", trimmed)
+            is_item = (trimmed ~ /^- /)
+            is_heading = (trimmed ~ /^#/)
+            is_placeholder = (trimmed ~ /[<>]/)
+            if (have_prev && !prev_first && !prev_heading && prev !~ /[<>]/ \
+                && prev !~ /[.:!?]$/ && !is_item && !is_heading \
+                && !is_placeholder && trimmed !~ /:$/) n++
+            prev = trimmed
+            prev_heading = is_heading
+            prev_first = is_first
+            have_prev = 1
+            is_first = 0
+        }
+        END { print n + 0 }
+    ' "$SANDBOX/repo/$1"
+}
+subj="$(subject_len docs/git-guide.md '```txt')"
+check "the commit example's subject is within 50 characters" "1" \
+    "$(awk -v n="$subj" 'BEGIN { print (n > 0 && n <= 50) ? 1 : 0 }')"
+check "and its body is not hand-wrapped" "0" "$(wrapped_lines docs/git-guide.md '```txt')"
+check "the PR template has no hand-wrapped placeholder" "0" \
+    "$(wrapped_lines skills/git-pr-architect/SKILL.md '```markdown')"
+check "the commit template has no hand-wrapped placeholder" "0" \
+    "$(wrapped_lines skills/git-commit-architect/SKILL.md '```text')"
+
+# The project rule that makes an agent run all of the above lives in AGENTS.md,
+# which DSH loads from the project root. Losing it would be silent.
+check "AGENTS.md exists at the repository root" "1" \
+    "$([[ -f "$SANDBOX/repo/AGENTS.md" ]] && echo 1 && exit 0 || echo 0)"
+check "and it names the check to run" "yes" \
+    "$(grep -q '\./check\.sh' "$SANDBOX/repo/AGENTS.md" && echo yes || echo no)"
+check "and it carries the identity warning" "1" \
+    "$(grep -c 'signingkey' "$SANDBOX/repo/AGENTS.md" || true)"
+
+# A repository file that changes after it was linked must not turn the machine's
+# status into a problem. It did: link_health compared the content against a hash
+# recorded when the link was made, so editing a file here — or pulling one, which
+# is the whole point of the repository — reported the link as stale, and the
+# healthy path never rewrote the record, so the report could never clear.
+cp "$SANDBOX/repo/config/bash/rc.d/20-aliases.sh" "$SANDBOX/aliases.before"
+printf '\n# edited after the link was recorded\n' >> "$SANDBOX/repo/config/bash/rc.d/20-aliases.sh"
+rc=0; mgr "$SANDBOX/repo" config status > "$SANDBOX/edited.out" 2>&1 || rc=$?
+check "editing a repository file leaves the machine healthy" "0" "$rc"
+check "and the edited file is reported ok" "1" \
+    "$(grep -cE '^  ok +.*rc\.d/20-aliases\.sh' "$SANDBOX/edited.out")"
+check "nothing is reported stale" "0" \
+    "$(sed 's/\x1b\[[0-9;]*m//g' "$SANDBOX/edited.out" | grep -cE '^  stale +/' || true)"
+cp "$SANDBOX/aliases.before" "$SANDBOX/repo/config/bash/rc.d/20-aliases.sh"
 
 echo
 echo "───────────────────────────────────────────────"

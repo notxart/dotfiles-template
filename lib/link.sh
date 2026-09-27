@@ -212,12 +212,24 @@ link_registry_build() {
 
     # Agent skills are discovered dynamically: adding a directory under
     # skills/ must not require editing this function.
+    #
+    # One link per FILE, not per directory, for the same reason nothing else in
+    # this registry links a directory: with a directory link, every file written
+    # beside the real one lands inside the repository. An agent asked to work on
+    # a skill writes next to SKILL.md, and `$DSH_HOME/skills/<name>/` being a
+    # real directory is what keeps that file out of the working tree. Nested
+    # files are linked too, so a skill that ships resources keeps working.
     if [[ "${FLAG_WITH_DSH:-0}" -eq 1 ]]; then
-        local skill_dir skill_name
+        local skill_dir skill_name skill_file rel
         for skill_dir in "$SCRIPT_DIR"/skills/*/; do
             [[ -d "$skill_dir" ]] || continue
             skill_name="$(basename "$skill_dir")"
-            printf '%s\t%s\t%s\n' "skills/$skill_name" "$(link_registry_skill_dest "$skill_name")" "link"
+            while IFS= read -r skill_file; do
+                [[ -n "$skill_file" ]] || continue
+                rel="${skill_file#"$skill_dir"}"
+                printf '%s\t%s\t%s\n' \
+                    "skills/$skill_name/$rel" "$(link_registry_skill_dest "$skill_name")/$rel" "link"
+            done < <(find "$skill_dir" -type f 2>/dev/null | sort)
         done
     fi
 }
@@ -293,11 +305,11 @@ link_resolve() {
 
 # link_health <src> <dest> — classify the current on-disk state.
 #   absent   nothing there yet
-#   ok       a symlink already pointing at src, content unchanged
+#   ok       a symlink already pointing at src
 #   stale    a symlink pointing elsewhere, or a dangling symlink
 #   blocked  a real file or directory occupies the destination
 link_health() {
-    local src="$1" dest="$2" current recorded actual
+    local src="$1" dest="$2" current
     if [[ ! -e "$dest" && ! -L "$dest" ]]; then
         printf '%s\n' "$LINK_STATE_ABSENT"
         return 0
@@ -316,16 +328,19 @@ link_health() {
         printf '%s\n' "$LINK_STATE_STALE"
         return 0
     fi
-    # Hash comparison is advisory: drift is ultimately resolved by git in
-    # `config sync`, so a miss here is not fatal.
-    recorded="$(manifest_get "$dest" 2>/dev/null | cut -f5 | awk 'NR==1{print; exit}')"
-    if [[ -n "$recorded" && "$recorded" == sha256:* ]]; then
-        actual="$(sha256_file "$dest")"
-        if [[ -n "$actual" && "sha256:$actual" != "$recorded" ]]; then
-            printf '%s\n' "$LINK_STATE_STALE"
-            return 0
-        fi
-    fi
+    # No content comparison here, and that is a decision rather than an omission.
+    #
+    # A destination that is a symlink to the registered source HAS the
+    # repository's content: that is what linking means, so its bytes can never
+    # disagree with the source in a way a user could act on. Comparing them
+    # against a hash recorded when the link was made therefore reported every
+    # file the repository had edited since — or every file a `git pull` brought
+    # in — as "stale", and link_apply's healthy path returns early without
+    # rewriting the record, so the alarm could never clear. A warning that is
+    # permanently on, on a machine that is exactly right, is worse than no
+    # warning: it hides the real ones. Divergence that DOES matter is handled
+    # above: a destination that is no longer a symlink is blocked, and one that
+    # points somewhere else is stale.
     printf '%s\n' "$LINK_STATE_OK"
 }
 
@@ -340,7 +355,10 @@ link_record() {
     # reference aborts the run. That is what made every adoption and every link
     # record fail with "src: unbound variable".
     src_rel="${src#"$SCRIPT_DIR"/}"
-    # Only genuine repository files get a content hash.
+    # Only genuine repository files get a content hash. It records what was
+    # linked, for anyone reading the manifest later; it is deliberately NOT an
+    # input to link_health, because a link's content is the repository's content
+    # by definition (see the comment there).
     if [[ "$kind" != "seed" && -f "$src" ]]; then
         hash="sha256:$(sha256_file "$src")"
     fi

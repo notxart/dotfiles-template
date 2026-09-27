@@ -27,6 +27,8 @@
 #   * prose wraps at 72 with no continuation indent (indenting prose renders it
 #     as a code block in Markdown views of a commit message)
 #   * bullets keep their marker and indent continuation lines by two spaces
+#   * an indented line is a continuation and keeps its indent, which is what
+#     makes a second pass over an already-formatted message change nothing
 #   * trailers (Refs:, Co-authored-by:, ...) are never wrapped
 #   * no word is ever split and no line ever ends in whitespace
 #
@@ -35,8 +37,10 @@
 #   config/git/wrap-msg.sh --check < msg.txt    # validate only; exit 1 on a problem
 #   config/git/wrap-msg.sh --edit <file>        # git core.editor entry point
 #
-# stdout carries ONLY the formatted message. Errors and the --check summary go
-# to stderr, so `config/git/wrap-msg.sh < draft > message` is always safe.
+# stdout carries ONLY the formatted message, in every mode and whatever the
+# verdict, so `config/git/wrap-msg.sh < draft > message` can never truncate the
+# message it was asked to format. Errors and the --check summary go to stderr;
+# the exit code carries the verdict.
 #
 # Exit codes: 0 ok, 1 subject too long or a formatted line over width, 2 usage/IO
 # ==============================================================================
@@ -75,6 +79,15 @@ NR == 1 { sub(/[ \t]+$/, ""); print; next }
         print line
         next
     }
+    # An INDENTED line is a continuation of the item above -- which is exactly
+    # what this formatter produces for a bullet that had to be broken. It must
+    # keep that indent, or running the formatter twice would destroy it: the
+    # second pass would treat the continuation as fresh prose, strip its leading
+    # whitespace and re-wrap it at column zero. That is not hypothetical: the
+    # real commit path runs these rules twice (prepare-commit-msg on injection,
+    # then core.editor before the editor opens), so a non-idempotent rule eats
+    # the indent of every long bullet in every message.
+    if (line ~ /^[ \t]/) { print wrap("  ", "  ", line); next }
     if (line ~ /^- /) { print wrap("- ", "  ", substr(line, 3)); next }
     print wrap("", "", line)
 }
@@ -153,18 +166,27 @@ fi
 
 subject="$(head -n1 "$input")"
 subject_len="${#subject}"
+
+# Format FIRST, unconditionally. Validation below reports a problem; it must
+# never decide whether the message reaches stdout, because filter mode is used
+# as `wrap-msg.sh < draft > message`. A validation failure that printed nothing
+# would leave an EMPTY file where the draft used to be, and the caller would
+# have no way to tell that from a successful format of an empty message.
+awk "$WRAP_AWK" "$input" > "$formatted" || {
+    printf 'ERROR: could not format the message.\n' >&2
+    exit 2
+}
+
+rc=0
 if [[ -z "$subject" ]]; then
     printf 'ERROR: the subject line (line 1) is empty.\n' >&2
-    exit 1
-fi
-if [[ "$subject_len" -gt "$SUBJECT_MAX" ]]; then
+    rc=1
+elif [[ "$subject_len" -gt "$SUBJECT_MAX" ]]; then
     printf 'ERROR: subject is %d characters, limit is %d.\n' "$subject_len" "$SUBJECT_MAX" >&2
     printf '       %s\n' "$subject" >&2
     printf '       Shorten it and move the detail into the body.\n' >&2
-    exit 1
+    rc=1
 fi
-
-awk "$WRAP_AWK" "$input" > "$formatted"
 
 if [[ "$MODE" == "check" ]]; then
     # Two things are verified, because either can fail in practice: the subject
@@ -175,18 +197,23 @@ if [[ "$MODE" == "check" ]]; then
     if [[ "$overlong" -gt 0 ]]; then
         printf 'ERROR: %d formatted line(s) exceed %d characters.\n' "$overlong" "$WIDTH" >&2
         awk -v w="$WIDTH" 'length($0) > w { printf "       %3d | %s\n", length($0), $0 }' "$formatted" >&2
-        exit 1
+        rc=1
     fi
     trailing="$(awk '/[ \t]+$/ { n++ } END { print n + 0 }' "$formatted")"
     if [[ "$trailing" -gt 0 ]]; then
         printf 'ERROR: %d formatted line(s) end with whitespace.\n' "$trailing" >&2
-        exit 1
+        rc=1
     fi
-    printf 'ok: subject %d/%d chars, %d lines, longest %d/%d\n' \
-        "$subject_len" "$SUBJECT_MAX" \
-        "$(wc -l < "$formatted")" \
-        "$(awk '{print length}' "$formatted" | sort -rn | head -1)" "$WIDTH" >&2
-    exit 0
+    if [[ "$rc" -eq 0 ]]; then
+        printf 'ok: subject %d/%d chars, %d lines, longest %d/%d\n' \
+            "$subject_len" "$SUBJECT_MAX" \
+            "$(wc -l < "$formatted")" \
+            "$(awk '{print length}' "$formatted" | sort -rn | head -1)" "$WIDTH" >&2
+    fi
 fi
 
+# Both modes print the formatted message. `--check` is a validator, but its
+# stdout is still the message so that a redirect cannot be emptied by a failed
+# check; the verdict is the exit code and the summary on stderr.
 cat "$formatted"
+exit "$rc"

@@ -14,8 +14,9 @@ cryptographic signing to keep the repository maintainable and bisect-friendly.
   Generate a key (`gpg --full-generate-key`) and put its fingerprint into
   `config/git/config.ini` (`[user] signingkey`) **before** your first commit;
   the template's placeholder key will fail otherwise.
-- **Vim >= 9.0** (optional but recommended) — `~/.config/vim/vimrc` wraps
-  commit messages at 72 columns via the `gitcommit` filetype.
+- **Vim >= 9.0** (optional but recommended) — `config/vim/vimrc` marks the column
+  limit and runs the repository's formatter on save for the `gitcommit` filetype.
+  The formatting itself does not depend on Vim; see "Wrapping" below.
 
 ## 1. Core Principles
 
@@ -66,9 +67,11 @@ The project includes a hardened `config/git/config.ini`. Key features:
   that chain `.git/hooks/<hook>.local`. Without a `.local` hook they are
   inert, so existing per-repo hooks keep working under the global `hooksPath`.
 
-Both the hook and `core.editor` apply the same wrapping rules to the same
-message, so a commit that opens an editor is formatted once on the way in and
-again on save without changing the result.
+The hook and `core.editor` apply the same wrapping rules to the same message, so
+a commit that opens an editor is formatted once on the way in and again on save
+**without changing the result**: the rules are idempotent, and `./check.sh`
+asserts both that and the fact that the two copies of those rules agree byte for
+byte.
 
 All hooks are inert by default; the AI draft flow only activates when an agent
 writes `.git/AI_COMMIT_MSG` (see the `git-commit-architect` skill).
@@ -135,34 +138,52 @@ specification.
 
 ### Wrapping
 
-Do **not** hand-wrap commit message lines. Formatting is deterministic tooling's
-job, and it happens at two points that cover every way a message can be written:
+**Write the message unwrapped.** One paragraph on one line, one bullet on one
+line, no line breaks you inserted yourself. Formatting is deterministic tooling's
+job, and it happens without anyone remembering to do it:
 
 - `config/git/wrap-msg.sh` is set as `core.editor`, so it formats the message file
   before the real editor opens. This is the only mechanism that covers
   `git commit --amend` and `git rebase -i`, because neither runs
-  `prepare-commit-msg`. It reports an over-long subject rather than repairing it —
-  only the author knows what to cut — and it never splits a word or leaves
-  trailing whitespace.
-- The `prepare-commit-msg` hook formats the injected AI draft with the same
-  rules, so the buffer is already correct when the editor opens.
-- `config/vim/vimrc` rewraps on save for the `gitcommit` filetype, as a backstop
-  for lines typed by hand.
+  `prepare-commit-msg`. It never splits a word and never leaves trailing
+  whitespace.
+- The `prepare-commit-msg` hook formats the injected AI draft with **the same
+  rules**, so the buffer is already correct when the editor opens.
+- `config/vim/vimrc` runs that same script on save, which catches anything typed
+  during the session. It used to have its own `fold`-based rules; three
+  implementations of one convention produced three different messages.
 
-Run `config/git/wrap-msg.sh --check < msg.txt` to validate a message without
-opening an editor: it exits non-zero and names the problem (subject over 50
-characters, a line over 72).
+Hand-wrapping does not merely duplicate that work — it survives it. The
+formatter treats each line as its own paragraph, so a paragraph you already broke
+at 77 columns comes back as `... before falling` / `back` / `to manual builds`:
+an orphaned word where your break happened to land. Write the paragraph on one
+line and let the tooling choose the breaks.
 
-Keep the subject under 50 characters and the body under ~72 as a habit — the
-tools enforce the second, and can only report the first.
+The one thing the tooling will not fix is the subject. It is never wrapped —
+only the author knows what to cut — so keep it **under 50 characters** yourself;
+the formatter reports an over-long subject and leaves it alone. `./check.sh`
+asserts that a rejected subject still leaves the whole message intact.
+
+Validate without opening an editor:
+
+```sh
+config/git/wrap-msg.sh --check < msg.txt
+```
+
+It exits non-zero and names the problem (empty subject, subject over 50
+characters, a formatted line over 72, trailing whitespace), and writes the
+formatted message to stdout in either case.
 
 ### Example
 
-```txt
-feat(install): enforce minimum tool versions via hybrid installation strategy
+This is a draft as an author should write it — every paragraph and every bullet
+on a single line. Notice that the prose of this document is wrapped to be read;
+a **message** is not: its line breaks are produced by the tooling.
 
-The installer now checks installed and candidate versions before falling back
-to manual builds, preventing silent toolchain downgrades.
+```txt
+feat(install): enforce minimum tool versions
+
+The installer now checks installed and candidate versions before falling back to manual builds, preventing silent toolchain downgrades. The check runs before any install, so a machine can no longer be silently downgraded by a stale repository candidate.
 
 Key Changes:
 - Version sorter with GNU sort fallback (gsort on macOS)
@@ -171,6 +192,9 @@ Key Changes:
 Verification:
 - Tested against apt and brew environments
 ```
+
+After `git commit` opens the editor, that same draft is already wrapped at 72
+columns, with the bullets' continuation lines indented by two spaces.
 
 ## 7. The Workflow
 

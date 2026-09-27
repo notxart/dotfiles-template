@@ -65,12 +65,20 @@ git add -p          # stage hunks selectively (alias: git ap)
 git commit          # alias: git ci
 ```
 
-For a plain `git commit`, the `prepare-commit-msg` hook injects the agent's
-draft into your editor automatically (zero copy-paste) — already wrapped at
-72 columns at injection, independent of your editor. Review and edit it —
-Vim additionally rewraps long lines **on save** (vimrc `BufWritePre`, a
-second line of defense for your hand edits) — save (`:wq`), and enter your
-GPG passphrase in the pinentry prompt. The AI never sees your key.
+For a plain `git commit`, `core.editor` formats the message file and the
+`prepare-commit-msg` hook injects the agent's draft into it (zero copy-paste) —
+so what you see in the editor is already wrapped at 72 columns, with an
+over-long subject reported rather than silently cut. Review and edit it, save
+(`:wq`), and enter your GPG passphrase in the pinentry prompt. The AI never sees
+your key.
+
+Edit it however you like, but **do not re-wrap it by hand** and do not ask an
+agent to: the rules are idempotent, so a manual break is not undone, it is kept
+and re-wrapped around — a paragraph you broke at 77 columns comes back with an
+orphaned word on the next line. Write one paragraph per line and let the tooling
+decide where the breaks go. Saving in Vim applies the same script a second time
+for anything you typed, which is why an edit cannot leave the message in a shape
+the repository does not use.
 
 > The hook does **not** inject into `git commit -m "..."`: a hand-written
 > message always wins.

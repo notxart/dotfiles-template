@@ -308,6 +308,14 @@ migrate_execute() {
         [[ "$action" == "convert" ]] || continue
         [[ -L "$staging_dir/$(basename "$a")" ]] || continue
         rm -f "$staging_dir/$(basename "$a")"
+        # The record for the DIRECTORY is dropped here, because the directory is
+        # no longer a managed destination — its files are, individually, from
+        # now on. Leaving it behind would make it an orphan the moment the
+        # registry stopped naming the directory, and link_prune_orphans refuses
+        # to remove a record whose destination is no longer a symlink, so
+        # `config status` would report it as an issue on a healthy machine for
+        # ever.
+        manifest_remove "$a" 2>/dev/null || true
         log_info "Converted to a real directory: ${a#"$HOME"/}"
     done <<< "$plan"
 

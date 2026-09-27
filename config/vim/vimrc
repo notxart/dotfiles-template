@@ -2,32 +2,70 @@
 " Minimal Vim Config
 " Path: ~/.config/vim/vimrc (symlinked from config/vim; Vim >= 9.0
 "       loads this XDG path natively when ~/.vimrc does not exist)
-" Purpose: deterministic commit-message wrapping at 72 columns.
+" Purpose: keep commit messages at the project's 72-column convention while
+" they are being written. Vim does NOT own the formatting rules — see below.
 " Git sets the filetype to 'gitcommit' when editing commit messages
 " (including prepare-commit-msg injected drafts), so this applies ONLY
 " to commit messages — all other files are unaffected.
 " =============================================
 
-" Wrap commit message lines at 72 columns while typing
+" Wrap commit message lines at 72 columns while typing. This is a typing aid:
+" it keeps what you type inside the limit as you type it. The canonical shape
+" is produced by config/git/wrap-msg.sh (see the save-time pass below).
 autocmd FileType gitcommit setlocal textwidth=72
 
 " Visually mark the 73rd column (the wrap limit + 1) in commit messages
 autocmd FileType gitcommit setlocal colorcolumn=73
 
-" Rewrap long commit-message lines deterministically ON SAVE.
-" textwidth only wraps text that is being typed — lines written by an AI
-" draft (agent-authored, injected via the prepare-commit-msg hook) are NOT
-" rewrapped by Vim on their own, so fix them here.
-" Two separate defs (a pipe inside an :autocmd definition would truncate it):
-" first trims trailing whitespace, second rewraps. Only non-comment (#) lines
-" are filtered: git's template hint lines and the `git commit -v` diff listing
-" stay untouched. `fold -s -w 72` breaks at word boundaries one line at a
-" time, preserving bullet/paragraph structure — a `gq` paragraph join would
-" merge list items into prose. Idempotent: already-wrapped lines pass through
-" unchanged. Requires the BSD/GNU `fold` utility (present on macOS and all
-" supported Linux distros). Note: `fold -w` counts BYTES (not display
-" columns), so a CJK line wraps at 72 bytes ≈ 24 full-width characters.
-" Commit messages in this project are English-first (see the
-" git-commit-architect skill), so this rarely matters.
-autocmd BufWritePre COMMIT_EDITMSG silent! keepjumps %s/\s\+$/e
-autocmd BufWritePre COMMIT_EDITMSG silent! keepjumps global/^[^#]/execute '.!fold -s -w 72'
+" ------------------------------------------------------------------------------
+" Save-time pass: the SAME formatter the rest of the toolchain uses.
+"
+" There used to be a second implementation here (`fold -s -w 72`), and a third
+" one in Vim's own textwidth reflow. Three implementations of one convention
+" produce three different results: `fold` breaks at byte 72 and drops the
+" continuation indent of a bullet, and an earlier version of this file silently
+" fell back to it. There is now exactly one implementation,
+" config/git/wrap-msg.sh, and this pass calls it.
+"
+" Why a save-time pass at all, when wrap-msg.sh already runs as core.editor
+" before this editor opens? Because that pass only covers text that existed
+" when the editor opened. Anything typed during the session has never been
+" through it, and a long line typed by hand would otherwise survive into the
+" commit. The pass is safe to repeat: wrap-msg.sh is idempotent, so running it
+" over its own output changes nothing.
+"
+" Three properties this function depends on, all asserted by
+" ./check.sh:
+"   * only the MESSAGE is filtered. With commit.verbose the buffer also holds
+"     git's comment block and the diff below the '>8' scissors line; the
+"     message ends at the first line starting with '#', and everything from
+"     there down is left exactly as git wrote it.
+"   * the filter never empties the buffer. wrap-msg.sh writes the formatted
+"     message to stdout whatever its verdict, so a rejected subject still
+"     leaves the message in place instead of replacing it with nothing.
+"   * a failure is not hidden. The formatter's stderr reaches the screen, so an
+"     over-long subject is reported at save time rather than silently kept.
+" ------------------------------------------------------------------------------
+function! s:FormatCommitMessage() abort
+    let l:script = expand('$DSH_DOTFILES_DIR')
+    if empty(l:script)
+        let l:script = expand('~/dotfiles')
+    endif
+    let l:script = l:script . '/config/git/wrap-msg.sh'
+    if !executable(l:script)
+        return
+    endif
+
+    " The message ends before git's comment block (and the verbose diff).
+    let l:first_comment = search('^#', 'nw')
+    let l:last = l:first_comment > 0 ? l:first_comment - 1 : line('$')
+    if l:last < 1
+        return
+    endif
+
+    " keepjumps keeps the cursor still; the range filter replaces only the
+    " message lines. shellescape protects a repository path containing spaces.
+    silent keepjumps execute '1,' . l:last . '!' . shellescape(l:script)
+endfunction
+
+autocmd BufWritePre COMMIT_EDITMSG call s:FormatCommitMessage()

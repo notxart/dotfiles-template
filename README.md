@@ -148,22 +148,33 @@ arriving in the middle of it would have no context.
 
 ### Verifying the manager itself
 
-Two scripts at the repository root run the manager against a throwaway `$HOME`
-(created under `.sandbox-e2e/`, which is gitignored), so nothing on your own
-machine is touched:
+`./check.sh` runs the manager against a throwaway `$HOME` (created under
+`.sandbox-e2e/`, which is gitignored), so nothing on your own machine is
+touched: `sudo`, `apt-get`, the network and every tool the manager would install
+are stubs that record what they were asked to do instead of doing it.
 
 ```sh
-./sandbox-check.sh <name>   # run an install and leave report.txt to inspect
-./acceptance-check.sh       # assert the fourteen documented behaviours
+./check.sh            # the acceptance matrix; exits non-zero on failure
+./check.sh --report   # one install, then a report to read; exits 0
 ```
 
-The first is for looking at what the manager did — the resulting links, the real
-directories under `~/.config`, the files it wrote under `~/.local`. The second is
-the acceptance matrix: fresh install, idempotent second install, an application's
-own file surviving, an interrupted link being repaired, the legacy
-directory-symlink migration, loop detection, every `config sync` verdict, a
-refused install when the manager and shell disagree, orphaned records, the
-manifest round-trip, the no-terminal refusal, and the seeded-file contract.
+`--report` is for looking: it leaves `report.txt` holding the resulting links, the
+entries directly under `~/.config`, the skill destinations, any symlink left
+inside the repository, and everything written under `~/.local`. Without a flag
+the script asserts instead, walking fourteen scenarios in order — a fresh
+install, an idempotent second install, an application's own file surviving, an
+interrupted link being repaired, the legacy directory-symlink migration, loop
+detection, every `config sync` verdict, a refused install when the manager and
+shell disagree, orphaned records, the manifest round-trip, the no-terminal
+refusal, and the seeded-file contract — plus the guards that keep the
+commit-message formatter honest.
+
+> [!NOTE]
+> An agent working in this repository is told to run `./check.sh` before claiming
+> a change works: that instruction lives in [AGENTS.md](AGENTS.md), which DSH
+> loads automatically from the project root. It also records the two mistakes
+> that are easy to make here — committing on the user's behalf, and overwriting
+> the identity values in `config/git/config.ini`.
 
 ### Git Identity Setup
 
