@@ -1,51 +1,22 @@
 " =============================================
-" Minimal Vim Config
-" Path: ~/.config/vim/vimrc (symlinked from config/vim; Vim >= 9.0
-"       loads this XDG path natively when ~/.vimrc does not exist)
-" Purpose: keep commit messages at the project's 72-column convention while
-" they are being written. Vim does NOT own the formatting rules — see below.
-" Git sets the filetype to 'gitcommit' when editing commit messages
-" (including prepare-commit-msg injected drafts), so this applies ONLY
-" to commit messages — all other files are unaffected.
+" Minimal Vim config: ~/.config/vim/vimrc, which Vim >= 9.0 loads natively when
+" ~/.vimrc does not exist. It keeps commit messages at the 72-column convention
+" while they are written; the formatting rules belong to config/git/wrap-msg.sh.
 " =============================================
 
-" Wrap commit message lines at 72 columns while typing. This is a typing aid:
-" it keeps what you type inside the limit as you type it. The canonical shape
-" is produced by config/git/wrap-msg.sh (see the save-time pass below).
+" Wrap at 72 while typing: a typing aid. The canonical shape comes from
+" config/git/wrap-msg.sh (see the save-time pass below).
 autocmd FileType gitcommit setlocal textwidth=72
 
 " Visually mark the 73rd column (the wrap limit + 1) in commit messages
 autocmd FileType gitcommit setlocal colorcolumn=73
 
-" ------------------------------------------------------------------------------
-" Save-time pass: the SAME formatter the rest of the toolchain uses.
-"
-" There used to be a second implementation here (`fold -s -w 72`), and a third
-" one in Vim's own textwidth reflow. Three implementations of one convention
-" produce three different results: `fold` breaks at byte 72 and drops the
-" continuation indent of a bullet, and an earlier version of this file silently
-" fell back to it. There is now exactly one implementation,
-" config/git/wrap-msg.sh, and this pass calls it.
-"
-" Why a save-time pass at all, when wrap-msg.sh already runs as core.editor
-" before this editor opens? Because that pass only covers text that existed
-" when the editor opened. Anything typed during the session has never been
-" through it, and a long line typed by hand would otherwise survive into the
-" commit. The pass is safe to repeat: wrap-msg.sh is idempotent, so running it
-" over its own output changes nothing.
-"
-" Three properties this function depends on, all asserted by
-" ./check.sh:
-"   * only the MESSAGE is filtered. With commit.verbose the buffer also holds
-"     git's comment block and the diff below the '>8' scissors line; the
-"     message ends at the first line starting with '#', and everything from
-"     there down is left exactly as git wrote it.
-"   * the filter never empties the buffer. wrap-msg.sh writes the formatted
-"     message to stdout whatever its verdict, so a rejected subject still
-"     leaves the message in place instead of replacing it with nothing.
-"   * a failure is not hidden. The formatter's stderr reaches the screen, so an
-"     over-long subject is reported at save time rather than silently kept.
-" ------------------------------------------------------------------------------
+" Save-time pass, with the same formatter as the rest of the toolchain: core.editor only
+" sees text that existed when the editor opened, and wrap-msg.sh is idempotent, so this
+" is safe to repeat. Only the message is filtered — git's comment block and the verbose
+" diff below the '>8' scissors line are left as written. A rejected subject is reported
+" on screen and never empties the buffer, because the formatter prints the message
+" whatever its verdict.
 function! s:FormatCommitMessage() abort
     let l:script = expand('$DSH_DOTFILES_DIR')
     if empty(l:script)

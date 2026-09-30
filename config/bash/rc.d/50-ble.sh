@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Configuration and installation for ble.sh (Bash Line Editor).
 
 # --- Environment Check ---
@@ -35,7 +36,7 @@ fi
 
 # --- Sourcing and Configuration ---
 if [[ -f "$BLESH_INSTALLED_PATH" ]]; then
-    # Source ble.sh
+    # shellcheck disable=SC1090  # installed outside the repository
     source "$BLESH_INSTALLED_PATH"
 
     # Note: If you want to combine fzf-completion with bash_completion, you need to

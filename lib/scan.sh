@@ -3,29 +3,16 @@
 # ==============================================================================
 # lib/scan.sh — Read-only inspection for `config sync`.
 #
-# Nothing here creates, moves or removes anything. Every function only reports,
-# so a scan can run before the user has decided anything — which is the whole
-# point of the reconciliation flow: show the situation, then act on request.
-#
-# Three questions are answered here:
-#
-#   scan_config_candidates  what exists under ~/.config that the repository does
-#                           not manage? (something an application wrote, or a
-#                           file the user added)
-#   scan_classify           is that something worth syncing, or is it machine
-#                           state that would break another computer?
-#   scan_content_risk       does it look like it carries a secret or an absolute
-#                           path, so that adopting it deserves a second look?
+# Nothing here creates, moves or removes anything: a scan runs before the user has
+# decided anything, which is the point of the flow — show it, then act on request.
 # ==============================================================================
 
-# Anything larger than this is reported but never read for classification: a
-# candidate that big is not a configuration file, and hashing it would stall the
-# scan for no benefit.
+# Larger than this is reported but never read for classification: a candidate that
+# big is not a configuration file, and hashing it would stall the scan.
 readonly SCAN_MAX_BYTES=$((1024 * 1024))
 
-# Paths inside ~/.config that are never candidates even though the repository
-# does not manage them. These are conventions every tool on the machine relies
-# on, and offering them for adoption would be noise at best.
+# Paths under ~/.config that are never candidates even though the repository does
+# not manage them: conventions every tool relies on, so adopting them is noise.
 readonly -a SCAN_NEVER_CANDIDATE=(
     "mimeapps.list"
     "user-dirs.dirs"
@@ -61,12 +48,8 @@ scan_is_managed() {
 }
 
 # scan_is_managed_parent <path> — 0 when <path> is a directory that CONTAINS
-# registry destinations.
-#
-# ~/.config/bash/rc.d and ~/.config/git/hooks are real directories the manager
-# created to hold linked files. They are not managed themselves, so a naive
-# candidate walk offers them for adoption, which is noise: the user did not put
-# them there and adopting a directory would move the manager's own links.
+# registry destinations. Those directories are not managed themselves, so a naive
+# candidate walk would offer the manager's own links for adoption.
 scan_is_managed_parent() {
     local path="$1"
     [[ -d "$path" ]] || return 1
@@ -75,11 +58,9 @@ scan_is_managed_parent() {
         END { exit !found }'
 }
 
-# scan_config_candidates — files and directories under ~/.config that the
-# repository does not manage and that are worth showing the user.
-#
-# Only the first two levels are walked: ~/.config/<tool>/<file>. Deeper trees
-# belong to the tool and offering every file inside them would bury the signal.
+# scan_config_candidates — what exists under ~/.config that this repository does
+# not manage and is worth showing. Only ~/.config/<tool>/<file> is walked: deeper
+# trees belong to the tool, and every file inside them would bury the signal.
 scan_config_candidates() {
     local path name
     [[ -d "$XDG_CONFIG_HOME" ]] || return 0
@@ -90,15 +71,9 @@ scan_config_candidates() {
         name="$(basename "$path")"
         scan_never_candidate "$name" && continue
         scan_is_managed "$path" && continue
-        # A directory that merely CONTAINS managed files is not itself a
-        # candidate, but it is still walked: the files inside it are reported
-        # or skipped one by one below. Skipping the whole directory here would
-        # hide exactly the files worth seeing — an application's own state
-        # beside hunk's config, or a user's extra file in ~/.config/git — and
-        # `scan_classify` exists to label those rather than to bury them. This
-        # became visible only once the registry stopped being flag-blind: an
-        # unmanaged ~/.config/hunk made its state.json a candidate, and a
-        # managed one silently stopped doing so.
+        # A directory that merely CONTAINS managed files is not a candidate, but
+        # it is still walked: the files inside are what `scan_classify` labels —
+        # an application's own state beside hunk's config, for instance.
         [[ -d "$path" && ! -L "$path" ]] || { printf '%s\n' "$path"; continue; }
         # A directory the repository does not manage: walk one level into it.
         local child
@@ -111,12 +86,9 @@ scan_config_candidates() {
     done < <(find "$XDG_CONFIG_HOME" -mindepth 1 -maxdepth 1 2>/dev/null | sort)
 }
 
-# scan_classify <path> — portable-config | machine-state | unknown
-#
-# A machine-state file is one that records THIS machine: a session, a cache, an
-# absolute path, a window layout. Syncing it to another computer does not help
-# that computer and can leak this one, so it is reported as such and ignored by
-# default.
+# scan_classify <path> — portable-config | machine-state | unknown. Machine state
+# records THIS machine (a session, a cache, an absolute path); syncing it helps no
+# other computer and can leak this one.
 scan_classify() {
     local path="$1" name size mode
     name="$(basename "$path")"
@@ -172,20 +144,14 @@ scan_content_risk() {
     grep -nE '/(home|Users)/[^"[:space:]]+' "$path" 2>/dev/null | head -n2 | while IFS= read -r hit; do
         printf 'absolute-path\t%s\n' "${hit:0:120}"
     done
-    # "Nothing found" is a result, not a failure. Without this the function
-    # returns the status of its last grep — 1 when it matched nothing — and every
-    # caller that captures the output with $( ) inherits that status. Under
-    # `set -e` an assignment from a command substitution takes the status of the
-    # substitution, so a clean file aborted the whole command.
+    # "Nothing found" is a result, not a failure: without this the status of the
+    # last grep leaks out, and under `set -e` a clean file aborts the command.
     return 0
 }
 
-# scan_redact <text> — keep a finding readable, remove the secret from it.
-#
-# The check below is about credentials, and a check that prints the credential
-# it found has moved the leak rather than reported it: this output goes to a
-# terminal, a scrollback buffer and often a pasted issue. The line number and
-# the shape of the match are what a reader needs; the value is not.
+# scan_redact <text> — keep a finding readable, remove the secret from it. A check
+# that prints the credential it found has moved the leak rather than reported it:
+# the line number and the shape of the match are what a reader needs.
 scan_redact() {
     printf '%s' "$1" \
         | sed -E \
@@ -194,21 +160,15 @@ scan_redact() {
             -e 's/((token|password|passwd|secret|api[_-]?key)[[:space:]]*[=:][[:space:]]*).*/\1***/I'
 }
 
-# scan_credential_leaks <path> — print "line<TAB>kind" for content that must not
-# be in a tracked file.
-#
-# Narrower than scan_content_risk on purpose. That one is a hint shown while
-# adopting an unknown file, where a false positive costs a second look. This one
-# runs on the repository's own tracked configuration and is meant to be believed,
-# so it looks for two things that are unambiguous: a credential helper that
-# stores secrets on disk, and a token-shaped string.
+# scan_credential_leaks <path> — "line<TAB>kind" for content that must not be in a
+# tracked file. Narrower than scan_content_risk on purpose: this one runs on the
+# repository's own config and is meant to be believed, so only unambiguous shapes.
 scan_credential_leaks() {
     local path="$1"
     [[ -f "$path" ]] || return 0
 
-    # Two statements rather than one pattern: the messages differ, and mixing
-    # them would produce "credential" for both a helper name (not a secret) and
-    # a token (one).
+    # Two statements, not one pattern: a helper name is not a secret, a token is,
+    # and the messages must not call both "credential".
     grep -nEi '^[[:space:]]*helper[[:space:]]*=[[:space:]]*(store|cache)' "$path" 2>/dev/null \
         | head -n3 | while IFS= read -r hit; do
             printf '%s\tstored-credential-helper\t%s\n' "${hit%%:*}" "$(scan_redact "$hit")"
@@ -252,17 +212,9 @@ scan_same_content() {
     [[ -n "$ha" && "$ha" == "$hb" ]]
 }
 
-# scan_show_diff <left> <right> — display a diff, bounded to <limit> lines.
-#
-# Two hazards are handled here, both of which used to abort the whole sync:
-#
-#   * `git diff --no-index` exits 1 when the files differ. That is a RESULT, not
-#     a failure, and under `set -e` it would end the run before the candidate
-#     list was ever printed.
-#   * Truncating the output with `head` closes the pipe while git is still
-#     writing, so git dies of SIGPIPE and the caller inherits the failure. The
-#     whole pipeline is therefore run for effect only, with its status ignored:
-#     showing a diff must never be able to stop the reconciliation.
+# scan_show_diff <left> <right> — a diff bounded to <limit> lines. `git diff
+# --no-index` exits 1 when the files differ, and `head` closes the pipe while git
+# is still writing: both are results, not failures, and neither may stop the run.
 scan_show_diff() {
     local left="$1" right="$2" limit="${3:-40}"
     git --no-pager diff --no-index --color=always -- "$left" "$right" 2>/dev/null \

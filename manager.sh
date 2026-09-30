@@ -1,16 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # ==============================================================================
-# manager.sh — Dotfiles manager (install / update / config)
+# manager.sh — Dotfiles manager: the only entry point.
 #
-# Description:
-#   Single entry point for configuring a machine from this repository, keeping
-#   the toolchain current, and reconciling ~/.config with the tracked config/.
-#
-# Usage:
-#   ./manager.sh install [--with-git-tui] [--with-dsh]
-#   ./manager.sh update
-#   ./manager.sh config <status|sync|adopt|ignore|restore>
+#   install [--with-git-tui] [--with-dsh]     update [--dry-run] [--only TOOL]
+#   config <status|sync|adopt|ignore|restore>       -h prints the full help
 # ==============================================================================
 
 set -euo pipefail
@@ -18,7 +12,8 @@ set -euo pipefail
 # --- Script Location (must be defined before the libraries are sourced) -------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
-readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+readonly SCRIPT_NAME
 readonly MANAGER_VERSION="0.1.0"
 
 # --- Library Loading ----------------------------------------------------------

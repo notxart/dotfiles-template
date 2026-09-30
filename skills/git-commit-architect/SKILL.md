@@ -13,7 +13,10 @@ You prepare everything; the human reviews, edits, and cryptographically signs.
 
 1. **NEVER execute**: `git commit`, `git push`, `git push -f`, `git reset --hard`,
    `git branch -D`, `git rebase`, `git merge`, `git cherry-pick`, `git tag`,
-   `gh pr create`. These are the human's exclusive actions.
+   `gh pr create`. These are the human's exclusive actions — and a plain
+   `git commit` needs their terminal anyway: with no terminal and no editor
+   configured, the formatter refuses instead of starting an editor that would
+   block, so attempting one from an agent fails fast rather than hanging.
 2. **Draft-only output**: write the commit message draft to exactly one place:
    `$(git rev-parse --git-dir)/AI_COMMIT_MSG`. Never write it anywhere else,
    and never ask the user to copy-paste a message.

@@ -1,8 +1,5 @@
 # =============================================
-# Lazygit Integration Config for the AI HITL Flow
-# Path: ~/.config/lazygit/config.yml
-# Part of the optional AI review toolchain
-# (installed via './manager.sh install --with-git-tui')
+# Lazygit config for the AI HITL review flow (optional: install --with-git-tui).
 # =============================================
 
 gui:
@@ -14,9 +11,9 @@ gui:
     inactiveBorderColor:
       - '#6272a4'
 
-# NOTE: git.paging.pager is intentionally NOT set. The interactive Hunk TUI
-# is launched via the 'H' custom command below (subprocess), which is more
-# reliable than piping diffs into an interactive pager.
+# NOTE: git.paging.pager is deliberately unset; the Hunk TUI is launched as a
+# subprocess from the 'H' command below, which is more reliable than piping diffs
+# into an interactive pager.
 
 customCommands:
   - key: 'H'
@@ -25,20 +22,17 @@ customCommands:
     description: 'Launch Hunk TUI review of the working tree'
     subprocess: true
 
-  # 'A' is bound to git commit with the AI draft injected by the
-  # prepare-commit-msg hook. Context is 'files' (not 'global') on purpose:
-  # lazygit's built-in 'A' = Amend in the commits/stash panels must keep
-  # working; in the Files panel 'A' is unbound, so no collision.
+  # 'A' commits with the AI draft injected by the prepare-commit-msg hook. Context is
+  # 'files', not 'global': lazygit's built-in 'A' is Amend in the commit panels, and in
+  # the Files panel 'A' is unbound, so nothing collides.
   - key: 'A'
     context: 'files'
     command: 'git commit'
     description: 'Commit with AI draft injected by the prepare-commit-msg hook'
     subprocess: true
 
-  # Safe force push (--force-with-lease --force-if-includes). NOT bound to 'P':
-  # lazygit's default keymap is P = Push, p = Pull (>= 0.44, see Config.md
-  # 'pushFiles: P / pullFiles: p'), so overriding 'P' would silently replace
-  # the normal push. 'F' is verified unbound across the default keymap.
+  # Safe force push. Not bound to 'P': lazygit's default keymap is P = Push, p = Pull
+  # (>= 0.44), so overriding it would silently replace the normal push. 'F' is unbound.
   - key: 'F'
     context: 'global'
     command: 'git pf'

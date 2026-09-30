@@ -14,6 +14,10 @@ cryptographic signing to keep the repository maintainable and bisect-friendly.
   Generate a key (`gpg --full-generate-key`) and put its fingerprint into
   `config/git/config.ini` (`[user] signingkey`) **before** your first commit;
   the template's placeholder key will fail otherwise.
+- **Matching XDG paths** — `./manager.sh install` refuses to start when the paths
+  the manager derives and the paths `config/bash/rc.d/*.sh` export disagree, so a
+  half-installed machine cannot come out of a config edit. See
+  [The XDG preflight](config-sync.md#the-xdg-preflight-why-install-can-refuse-to-start).
 - **Vim >= 9.0** (optional but recommended) — `config/vim/vimrc` marks the column
   limit and runs the repository's formatter on save for the `gitcommit` filetype.
   The formatting itself does not depend on Vim; see "Wrapping" below.
@@ -30,9 +34,8 @@ cryptographic signing to keep the repository maintainable and bisect-friendly.
 
 The project includes a hardened `config/git/config.ini`. Key features:
 
-- **Never auto-execute typos**: `help.autocorrect = prompt` (Git >= 2.34)
-  requires explicit confirmation before running a corrected command. The old
-  `10` (1-second auto-execute) is dangerous for destructive commands.
+- **Never auto-execute typos**: `help.autocorrect = prompt` (Git >= 2.34) asks
+  before running a corrected command instead of running it after a delay.
 - **Global hooks path**: `core.hooksPath = ~/.config/git/hooks` — see the
   [Global Hooks](#3-global-hooks) section. Note that with `hooksPath` set,
   per-repo `.git/hooks/` are ignored; the shipped dispatchers re-enable them.
@@ -135,6 +138,7 @@ specification.
 - `docs`: documentation only changes
 - `perf`: a code change that improves performance
 - `chore`: changes to the build process or auxiliary tools
+- `test`: adding or correcting tests
 
 ### Wrapping
 
@@ -150,8 +154,7 @@ job, and it happens without anyone remembering to do it:
 - The `prepare-commit-msg` hook formats the injected AI draft with **the same
   rules**, so the buffer is already correct when the editor opens.
 - `config/vim/vimrc` runs that same script on save, which catches anything typed
-  during the session. It used to have its own `fold`-based rules; three
-  implementations of one convention produced three different messages.
+  during the session. There is exactly one implementation of these rules.
 
 Hand-wrapping does not merely duplicate that work — it survives it. The
 formatter treats each line as its own paragraph, so a paragraph you already broke
@@ -173,6 +176,13 @@ config/git/wrap-msg.sh --check < msg.txt
 It exits non-zero and names the problem (empty subject, subject over 50
 characters, a formatted line over 72, trailing whitespace), and writes the
 formatted message to stdout in either case.
+
+Automation should commit with `-m`: a plain `git commit` needs an editor, and
+with no terminal and no editor configured `config/git/wrap-msg.sh` **refuses**
+rather than starting one it cannot show — an editor started without a terminal
+blocks until it is killed. The refusal is deliberate, and `./check.sh` asserts
+that no editor is ever launched in that situation. `-m` is safe but skips the
+formatter and the AI draft, so keep such a message inside 50 characters by hand.
 
 ### Example
 
@@ -210,4 +220,6 @@ columns, with the bullets' continuation lines indented by two spaces.
    `gh pr merge --squash --delete-branch` or `git bclean` where applicable.
 
 See [github-flow.md](github-flow.md) for the full step-by-step guide,
-including the AI-assisted Human-in-the-Loop flow.
+including the AI-assisted Human-in-the-Loop flow, and
+[config-sync.md](config-sync.md) for how these files get onto a machine —
+seeding, linking, `config sync`, and the backups taken along the way.

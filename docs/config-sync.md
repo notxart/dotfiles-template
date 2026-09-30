@@ -34,7 +34,7 @@ is therefore the only place a question is asked.
 | Term | Meaning |
 | --- | --- |
 | **registry** | The list of paths this repository manages: source in the repository, destination on the machine, and a mode. Defined in `lib/link.sh`. |
-| **manifest** | `$XDG_STATE_HOME/dotfiles/manifest.tsv`. What this machine recorded: the feature flags it opted into, the links it created, and a hash of each. |
+| **manifest** | `$XDG_STATE_HOME/dotfiles/manifest.tsv`. What this machine recorded: the feature flags it opted into, the links it created, and a hash of each as it was linked. The hash is there to be read — git, not the hash, decides whether content drifted. |
 | **tracked** | The file exists in the git index. This — not the manifest — is the authority on whether a path belongs to the repository. |
 | **link** | A symlink from the machine into the repository. The default mode. |
 | **seed** | Copied once, then owned by the machine (`config/git/work.ini`). `sync` never offers to reconcile a seeded file, because the machine is supposed to diverge. |
@@ -59,7 +59,7 @@ manager.sh config restore <path>...   # put a file back as a real file and forge
 
 ### `config status`
 
-Prints every registry path with one of four states, then a summary, then anything
+Prints every registry path with one of five states, then a summary, then anything
 else that needs attention: orphaned records (the source is gone), loop symlinks
 (the damage the old directory-level installer produced), and credential risks in
 the repository's own tracked `config/git/*.ini`.
@@ -70,10 +70,11 @@ the repository's own tracked `config/git/*.ini`.
 | `absent` | Nothing is there. `install` or `sync` will create it. |
 | `stale` | A symlink pointing somewhere else: a different checkout, a file of your own, or a dead target. |
 | `blocked` | A real file or directory is in the way. Nothing will touch it without you. |
+| `seeded` | A `seed` destination holding your own file. That is the intended end state, so it counts as healthy and is never reconciled. |
 
 Exit status: `0` when everything is healthy, `2` when something needs attention
-(the number of issues is printed). It never returns non-zero merely because it
-found something to report — that distinction matters when it is used in a script.
+(the number of issues is printed). It never exits `1`, so a script can tell
+"found something to report" apart from "the command itself broke".
 
 ### `config sync`
 
@@ -88,6 +89,38 @@ found something to report — that distinction matters when it is used in a scri
    and report what differs. A differing file is **never** touched, whatever flags
    were passed: `--yes` is not a licence to overwrite, it only skips the prompt
    for changes that cannot lose data.
+
+## The XDG preflight: why `install` can refuse to start
+
+Both layers derive the same paths independently: the manager from its own
+defaults, your shell from `config/bash/rc.d/*.sh`. If the two disagree, an
+install would put files where your shell never looks — `dsh` would find no
+skills, git would read the wrong config — so `install` compares them **before it
+touches anything** and refuses when a shared value differs:
+
+```text
+❯❯❯ Verifying Shared Values Across Both Layers
+  ⚠ DSH_HOME MISMATCH
+  manager uses: /home/you/.local/share/dsh
+  shell will use: /home/you/somewhere-else/dsh
+
+  Fix the mismatch in ONE place (recommended: config/bash/rc.d/) and re-run.
+  The manager deliberately does not overwrite your shell configuration.
+
+Error: 1 shared value(s) disagree — refusing to continue in strict mode.
+```
+
+The variables compared are the ones both layers set: `XDG_CONFIG_HOME`,
+`XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `PNPM_HOME`, `DSH_HOME`,
+`GNUPGHOME` and `GIT_CONFIG_GLOBAL`. A value built by running a command
+(`$HOME/$(hostname)`) cannot be checked statically and is reported as skipped
+rather than guessed at.
+
+Fix the mismatch in one place — `config/bash/rc.d/` is the recommended one — and
+re-run `./manager.sh install`.
+
+`config status`, `sync`, `adopt`, `ignore` and `restore` do **not** refuse: they
+work inside your own directories, where a warning is enough.
 
 ## When the machine and the repository disagree
 

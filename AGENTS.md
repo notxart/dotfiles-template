@@ -12,6 +12,7 @@ here reaches an agent without being asked for.
 ```sh
 ./check.sh            # the acceptance matrix; exits non-zero on failure
 ./check.sh --report   # one install in a throwaway HOME, then a report to read
+./check.sh --lint     # shellcheck over the source tree (opt-in; needs shellcheck)
 ```
 
 `./check.sh` is this project's unit test. Run it after any change to `lib/`,
@@ -53,6 +54,7 @@ never overwritten and never offered as a conflict.
 | `config/` | The master copy of every managed configuration file. |
 | `skills/<name>/SKILL.md` | Agent skills. **This is the canonical location.** |
 | `docs/` | Human-facing documentation. |
+| `check.sh` | The acceptance matrix, `--report` and `--lint`. |
 | `.sandbox-e2e/` | Throwaway runs from `check.sh`. Gitignored. |
 
 The live machine reads `config/` through file-level symlinks; `~/.config/<tool>/`

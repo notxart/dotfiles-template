@@ -3,28 +3,8 @@
 # ==============================================================================
 # lib/migrate.sh — Convert directory-level links into file-level links.
 #
-# The original installer linked whole directories (`~/.config/bash` ->
-# `<repo>/config/bash`). The file-level registry cannot use those: every path
-# underneath now resolves to a regular file through the directory link, which
-# `link_health` correctly reports as `blocked`. Measured on a legacy
-# installation, 18 of 23 records are blocked. Converting them is therefore not
-# optional — the registry and this migration ship together.
-#
-# The conversion is the riskiest operation in the project, because it has to
-# move a user's files out of the repository working tree without losing any of
-# them. Three properties keep it safe:
-#
-#   1. It only ever converts a destination that is a symlink INTO THIS
-#      REPOSITORY. Anything else is reported and left alone.
-#   2. Files in the repository directory that the registry does not know about
-#      (an application's state file, or a file the user created there because
-#      the directory was linked) are moved to the real destination FIRST, so
-#      the swap cannot carry them away.
-#   3. `migrate_plan` describes every move before anything happens, and
-#      `migrate_execute` repeats it as it goes.
-#
-# Nothing here deletes user data. The only removal is of symlinks that point
-# into this repository, which are recreated file by file in the final step.
+# The registry needs real directories, so a legacy whole-directory link must be swapped
+# for one: files git does not track are rescued into $HOME first.
 # ==============================================================================
 
 # migrate_is_repo_dir <path> — true when <path> is a symlink resolving to a
@@ -43,10 +23,8 @@ migrate_is_repo_dir() {
 # guessed, so a destination is only ever adopted from its declared source.
 migrate_repo_dir_for() {
     local destdir="$1" src
-    # `awk ... exit` rather than `| head -n1`: head closes the pipe as soon as
-    # it has its line, and because link_registry() keeps printing, the producer
-    # dies with SIGPIPE and bash reports "printf: write error: Broken pipe" for
-    # every remaining record. awk consumes the whole stream and exits cleanly.
+    # `awk ... exit` rather than `| head -n1`: head closes the pipe while the
+    # producer is still printing, and bash then reports a write error per record.
     src="$(link_registry | awk -F'\t' -v d="$destdir/" '
         index($2, d) == 1 {          # $2 starts with the destination directory
             rest = substr($2, length(d) + 1)
@@ -60,11 +38,8 @@ migrate_repo_dir_for() {
     printf '%s\n' "$SCRIPT_DIR/$rel"
 }
 
-# migrate_registry_srcs — the repository-relative sources the registry owns,
-# computed ONCE per run. `migrate_foreign_in` classifies every file under a
-# converted directory, and re-deriving the registry per file costs hundreds of
-# subshells (and, with an early-exiting consumer, a shell full of SIGPIPE
-# warnings).
+# migrate_registry_srcs — the repository-relative sources the registry owns, computed
+# ONCE per run: re-deriving the registry per file costs hundreds of subshells.
 migrate_registry_srcs() {
     if [[ -z "${MIGRATE_REGISTRY_SRCS:-}" ]]; then
         MIGRATE_REGISTRY_SRCS="$(link_registry_refs)"
@@ -72,16 +47,9 @@ migrate_registry_srcs() {
     printf '%s\n' "$MIGRATE_REGISTRY_SRCS"
 }
 
-# migrate_repo_tracked <repodir> — repository files under <repodir> that git
-# tracks but the registry does NOT link.
-#
-# These exist and are legitimate: config/git/wrap-msg.sh is a tool that lives
-# beside the git configuration without being symlinked into ~/.config, because
-# core.editor invokes it by absolute path rather than it being installed.
-#
-# They are NOT rescued (they belong to the repository), but they must leave the
-# repository directory before it is replaced, or the swap would strand them in a
-# directory the repository no longer owns.
+# migrate_repo_tracked <repodir> — files under <repodir> that git tracks but the
+# registry does not link, such as config/git/wrap-msg.sh, which core.editor calls by
+# absolute path. They stay in the repository, but must be named as not-foreign.
 migrate_repo_tracked() {
     local repodir="$1"
     [[ -d "$repodir" ]] || return 0
@@ -103,17 +71,9 @@ migrate_repo_tracked() {
     '
 }
 
-# migrate_foreign_in <repodir> — repository files under <repodir> that git does
-# NOT track. These are user or application data that must leave the working tree
-# before the directory is converted.
-#
-# The authority is the git index, not the registry. A registry comparison looks
-# equivalent but is not: a tracked tool that the registry deliberately does not
-# link (see migrate_repo_tracked) would be misclassified as someone's private
-# file and moved out of the repository.
-#
-# One awk pass classifies every file, so the registry is not re-derived per
-# file and nothing exits early on a live pipe.
+# migrate_foreign_in <repodir> — files under <repodir> that git does NOT track: user
+# or application data that must leave the working tree before the directory is
+# converted. The authority is the git index, not the registry — see above.
 migrate_foreign_in() {
     local repodir="$1"
     [[ -d "$repodir" ]] || return 0
@@ -136,7 +96,7 @@ migrate_foreign_in() {
 # happen and changes nothing. Output is a sequence of "ACTION\tARG..." lines so
 # callers can render or count it without parsing prose.
 migrate_plan() {
-    local destdir realdest repodir rel target
+    local destdir repodir rel target
     while IFS= read -r destdir; do
         [[ -n "$destdir" ]] || continue
         migrate_is_repo_dir "$destdir" || continue
@@ -145,15 +105,10 @@ migrate_plan() {
 
         printf 'convert\t%s\t%s\n' "$destdir" "$repodir"
 
-        # Foreign files first: they must be out of the repository before the
-        # directory is replaced, or the swap would delete them.
-        #
-        # `realdest` is the link path itself. The relative path from
-        # migrate_foreign_in is repository-relative and already carries the
-        # directory name ("bash/rc.d/99-local.sh"), so the base is the link, not
-        # its dirname and not its resolved target. `readlink -f` must not be
-        # used: the link resolves into the repository, so dirname(readlink)
-        # points back inside the working tree.
+        # Foreign files first: they must be out of the repository before the directory
+        # is replaced. The destination is the link path ITSELF, not its dirname and not
+        # its resolved target: the relative path from migrate_foreign_in already carries
+        # the directory name, and `readlink -f` would point back inside the working tree.
         while IFS= read -r rel; do
             [[ -n "$rel" ]] || continue
             target="$destdir/${rel#"$repodir"/}"
@@ -172,11 +127,8 @@ migrate_plan() {
     done < <(link_registry_dest_dirs)
 }
 
-# migrate_needed — 0 when at least one destination still needs conversion.
-#
-# The whole stream is consumed rather than tested with `[[ -n "$(...)" ]]` or
-# `| grep -q`: those close the pipe as soon as they have an answer, and
-# migrate_plan keeps producing records, so the producer dies with SIGPIPE.
+# migrate_needed — 0 when at least one destination still needs conversion. The stream
+# is consumed, not tested with grep -q, for the SIGPIPE reason above.
 migrate_needed() {
     migrate_plan | awk 'NF { found = 1 } END { exit !found }'
 }
@@ -222,24 +174,11 @@ migrate_print_plan() {
     log_info "the repository first and remain in your home directory."
 }
 
-# migrate_execute — perform the plan. Safe to re-run: every step is written so
-# that a second run finds the work already done.
-#
-# Every action comes from the PLAN rather than being recomputed.
-#
-# The order of the three passes is the whole trick, and it is subtle:
-#
-#   1. RENAME the destination symlink aside and create a real directory in its
-#      place. Until this happens, `<destdir>/<name>` and `<repodir>/<name>` are
-#      the SAME file, so any "does the target already exist?" test answers yes —
-#      which is how an earlier version silently skipped the rescue and lost the
-#      user's file. Moving the link aside removes the alias.
-#   2. RESCUE the foreign files, now out of the repository and into a directory
-#      that no longer aliases it.
-#   3. CLEAN UP the staging link and any loop symlinks.
-#
-# The repository's own tracked files never move: they stay where they are and
-# link_setup points file-level symlinks at them afterwards.
+# migrate_execute — perform the plan; safe to re-run, and every action comes from the
+# plan, not recomputed. The link is renamed aside and a real directory created FIRST,
+# because until then <destdir>/<name> and <repodir>/<name> are the same file and any
+# "does the target exist?" test answers yes — which is how the rescue was once skipped
+# and a user's file lost. Then the rescue, then cleanup. Tracked files never move.
 migrate_execute() {
     local plan
     plan="$(migrate_plan)"
@@ -272,9 +211,8 @@ migrate_execute() {
         swapped=$((swapped + 1))
     done <<< "$plan"
 
-    # (2) Rescue: the files are now visible only through the staging link, and
-    # each target is a path in a real directory rather than an alias of the
-    # source.
+    # (2) Rescue: the files are visible only through the staging link now, and each
+    # target is a path in a real directory rather than an alias of the source.
     while IFS=$'\t' read -r action a b; do
         [[ "$action" == "move-file" ]] || continue
         if [[ -e "$b" || -L "$b" ]]; then
@@ -290,15 +228,9 @@ migrate_execute() {
         fi
     done <<< "$plan"
 
-    # (3) Clean up: loop symlinks, then the staging links. Removing a symlink
-    # never removes the directory it points at, and every repository file was
-    # left in place, so nothing here can delete repository content.
-    #
-    # Note on tracked files the registry does not link (config/git/wrap-msg.sh):
-    # they need no action at all. Only the LINK is moved aside, never the
-    # repository directory, so those files are never disturbed. They are
-    # reported by migrate_plan as context; migrate_repo_tracked exists to keep
-    # them out of the foreign set, which is the part that matters.
+    # (3) Clean up: loop symlinks, then the staging links. Removing a symlink never
+    # removes its target, and only the LINK was moved aside, so tracked files the
+    # registry does not link were never disturbed and need no action here.
     while IFS=$'\t' read -r action a _b; do
         [[ "$action" == "remove-loop" ]] || continue
         rm -f "$a" && log_info "Removed loop symlink: ${a#"$SCRIPT_DIR"/}"
@@ -308,13 +240,9 @@ migrate_execute() {
         [[ "$action" == "convert" ]] || continue
         [[ -L "$staging_dir/$(basename "$a")" ]] || continue
         rm -f "$staging_dir/$(basename "$a")"
-        # The record for the DIRECTORY is dropped here, because the directory is
-        # no longer a managed destination — its files are, individually, from
-        # now on. Leaving it behind would make it an orphan the moment the
-        # registry stopped naming the directory, and link_prune_orphans refuses
-        # to remove a record whose destination is no longer a symlink, so
-        # `config status` would report it as an issue on a healthy machine for
-        # ever.
+        # The DIRECTORY's record is dropped: its files are the managed destinations
+        # from now on. Left behind it would be an orphan, and link_prune_orphans
+        # refuses to remove a record whose destination is no longer a symlink.
         manifest_remove "$a" 2>/dev/null || true
         log_info "Converted to a real directory: ${a#"$HOME"/}"
     done <<< "$plan"

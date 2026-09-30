@@ -8,8 +8,7 @@
 # ==============================================================================
 
 # --- Script Location Bootstrap -------------------------------------------------
-# The entry point (manager.sh) is expected to define SCRIPT_DIR.
-# When a module is sourced directly, derive the repo root from this file.
+# The entry point defines SCRIPT_DIR; a module sourced on its own derives it.
 if [[ -z "${SCRIPT_DIR:-}" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fi
@@ -18,9 +17,8 @@ readonly SCRIPT_DIR
 # --- Constants & Global State --------------------------------------------------
 
 # Script Metadata
-# The entry point already sets SCRIPT_NAME (readonly). Assign it here only when
-# this module is sourced standalone — re-declaring a readonly variable aborts
-# the shell, so the guard is required, not cosmetic.
+# manager.sh sets SCRIPT_NAME readonly; re-declaring a readonly variable aborts
+# the shell, so this guard is required for a standalone source, not cosmetic.
 if [[ -z "${SCRIPT_NAME:-}" ]]; then
     SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
     readonly SCRIPT_NAME
@@ -36,10 +34,8 @@ readonly CLR_MUTED="\033[0;37m"
 
 # Feature Flags
 #
-# An unprefixed assignment here would clobber a value supplied from outside
-# (an exported override, or the machine's recorded manifest) every time this
-# module is sourced. Default only when nothing was provided; which source wins
-# is decided explicitly by resolve_feature_flags below.
+# Default only when nothing outside supplied a value: an exported override or a
+# recorded manifest flag would otherwise be clobbered on every source.
 FLAG_GIT_TUI="${FLAG_GIT_TUI:-0}"
 FLAG_WITH_DSH="${FLAG_WITH_DSH:-0}"
 FLAG_GIT_TUI_SET=0
@@ -97,9 +93,8 @@ log_error()   { printf "\n${CLR_RED}Error: %s${CLR_RESET}\n" "$1" >&2; }
 # ==============================================================================
 # Interaction
 #
-# Every prompt in this project is fail-closed: when there is no terminal to ask
-# on, the answer is the safe one (skip), never the destructive one. Automation
-# must never be able to trigger a file move by accident.
+# Every prompt is fail-closed: with no terminal the answer is the safe one, so
+# automation can never trigger a file move by accident.
 # ==============================================================================
 
 is_tty() { [[ -t 0 && -t 1 ]]; }
@@ -133,10 +128,8 @@ confirm() {
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-# sha256_file <path> — hex digest on stdout, empty when no tool is available.
-# Advisory only: git remains the authority on whether content drifted, so a
-# missing checksum tool degrades the manifest to "no hash recorded" rather
-# than failing an install.
+# sha256_file <path> — hex digest on stdout, empty when no tool exists. Advisory
+# only: git decides whether content drifted, so a missing tool is not an error.
 sha256_file() {
     if command_exists sha256sum; then
         sha256sum "$1" 2>/dev/null | awk '{print $1}'
@@ -172,13 +165,9 @@ compare_versions_lt() {
     [[ "$smallest" == "$v1" ]]
 }
 
-# get_installed_version <cmd> — the version of the binary this shell would run.
-#
-# The search order is the order the shell resolves: pnpm's global bin first,
-# because this repository installs its tools there and puts that directory ahead
-# of everything else on PATH; then ~/.local/bin; then whatever PATH finds.
-# Reading ~/.local/bin first, as this used to, could report a stale copy that
-# nothing would execute, and made install act on a version the user never sees.
+# get_installed_version <cmd> — the version of the binary this shell would run:
+# pnpm's global bin, then ~/.local/bin, then PATH — the order the shell resolves.
+# Reading ~/.local/bin first could report a copy that nothing executes.
 get_installed_version() {
     local cmd="$1"
     local target_cmd=""

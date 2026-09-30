@@ -1,56 +1,22 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # config/git/wrap-msg.sh — Format and validate a commit message.
-#
-# Two modes:
-#
-#   config/git/wrap-msg.sh < draft > message      filter: format stdin to stdout
-#   config/git/wrap-msg.sh --edit <file>          git editor: format IN PLACE, then
-#                                            hand the file to the real editor
-#
-# The wrapping rules are INLINED (see the awk program below). That is not a
-# style choice: this script is invoked through symlinks, and bash resolves
-# BASH_SOURCE to the LINK's directory, so any attempt to source a file beside
-# the real script fails. An earlier version kept the rules in a separate awk
-# file and did not work when linked; the rules now travel with the script
-# wherever the link points.
-#
-# `--edit` exists so that formatting does not depend on remembering to run a
-# tool. config/git/config.ini sets it as core.editor, which makes every commit
-# path that opens an editor formatted — including `git commit --amend` and
-# `git rebase -i`, neither of which runs prepare-commit-msg. A rule that is only
-# enforced when someone remembers to enforce it is not a rule.
-#
-# Rules applied:
-#   * line 1 (the subject) is never wrapped; the 50-column convention is
-#     reported, not repaired, because only the author knows what to cut
-#   * prose wraps at 72 with no continuation indent (indenting prose renders it
-#     as a code block in Markdown views of a commit message)
-#   * bullets keep their marker and indent continuation lines by two spaces
-#   * an indented line is a continuation and keeps its indent, which is what
-#     makes a second pass over an already-formatted message change nothing
-#   * trailers (Refs:, Co-authored-by:, ...) are never wrapped
-#   * no word is ever split and no line ever ends in whitespace
-#
-# Usage:
-#   config/git/wrap-msg.sh < msg.txt            # print the formatted message
-#   config/git/wrap-msg.sh --check < msg.txt    # validate only; exit 1 on a problem
-#   config/git/wrap-msg.sh --edit <file>        # git core.editor entry point
-#
-# stdout carries ONLY the formatted message, in every mode and whatever the
-# verdict, so `config/git/wrap-msg.sh < draft > message` can never truncate the
-# message it was asked to format. Errors and the --check summary go to stderr;
-# the exit code carries the verdict.
-#
-# Exit codes: 0 ok, 1 subject too long or a formatted line over width, 2 usage/IO
+#   wrap-msg.sh < draft > message     |  wrap-msg.sh --check < file
+#   wrap-msg.sh --edit <file>         core.editor: format in place, then hand off
+# stdout carries only the formatted message; exit 0 ok, 1 a problem, 2 usage.
 # ==============================================================================
 set -uo pipefail
 
 readonly SUBJECT_MAX=50
 readonly WIDTH=72
 
-# Single source of the wrapping rules. Keeping this in a variable lets both the
-# filter mode and the in-place mode use exactly the same program.
+# One program, shared by filter and in-place mode, INLINED rather than sourced: this
+# script runs through symlinks and bash resolves BASH_SOURCE to the LINK, so sourcing a
+# sibling only worked until the link moved. One pass guarantees: the subject is never
+# wrapped (50 columns is reported, not repaired); prose wraps at 72 with no continuation
+# indent, because indented prose renders as a code block; bullets keep their marker and
+# indent continuations by two; trailers are never wrapped. The hook carries the same
+# program; ./check.sh compares the two.
 readonly WRAP_AWK='
 function wrap(prefix, cont, text,    out, line, word, sep, i, n, w) {
     n = split(text, w, /[ \t]+/)
@@ -79,14 +45,10 @@ NR == 1 { sub(/[ \t]+$/, ""); print; next }
         print line
         next
     }
-    # An INDENTED line is a continuation of the item above -- which is exactly
-    # what this formatter produces for a bullet that had to be broken. It must
-    # keep that indent, or running the formatter twice would destroy it: the
-    # second pass would treat the continuation as fresh prose, strip its leading
-    # whitespace and re-wrap it at column zero. That is not hypothetical: the
-    # real commit path runs these rules twice (prepare-commit-msg on injection,
-    # then core.editor before the editor opens), so a non-idempotent rule eats
-    # the indent of every long bullet in every message.
+    # An INDENTED line is a continuation of the item above -- which is what this
+    # formatter produces for a broken bullet. It must keep that indent, or a second
+    # pass would treat the continuation as fresh prose and re-wrap it at column zero:
+    # the real commit path runs these rules twice (the hook, then here).
     if (line ~ /^[ \t]/) { print wrap("  ", "  ", line); next }
     if (line ~ /^- /) { print wrap("- ", "  ", substr(line, 3)); next }
     print wrap("", "", line)
@@ -94,7 +56,8 @@ NR == 1 { sub(/[ \t]+$/, ""); print; next }
 '
 
 # ------------------------------------------------------------------------------
-# --edit <file> — the core.editor entry point
+# --edit <file> — core.editor, so every commit path that opens an editor is
+# formatted, including `--amend` and `rebase -i`, which never run the hook.
 # ------------------------------------------------------------------------------
 if [[ "${1:-}" == "--edit" ]]; then
     msgfile="${2:-}"
@@ -116,15 +79,20 @@ if [[ "${1:-}" == "--edit" ]]; then
     fi
     rm -f "$tmp"
 
-    # Hand over to the real editor. VISUAL/EDITOR are read here because git
-    # replaces them with this script before invoking it, so the previous value
-    # is not available. Guard against pointing back at this script, which would
-    # recurse forever.
+    # VISUAL/EDITOR are read here because git replaces them with this script before
+    # invoking it. A value pointing back at this script would recurse forever.
     real="${VISUAL:-${EDITOR:-}}"
     case "$real" in
         ""|*wrap-msg*) real="" ;;
     esac
     if [[ -z "$real" ]]; then
+        # Falling back to vim is safe only with a terminal: an automation that runs a
+        # plain `git commit` has none, and an editor started that way blocks instead of
+        # failing. Refuse, and name what to set.
+        if [[ ! -t 0 && ! -t 2 ]]; then
+            printf 'wrap-msg.sh: no editor configured and no terminal; set VISUAL or EDITOR.\n' >&2
+            exit 1
+        fi
         if command -v vim >/dev/null 2>&1; then
             real="vim"
         elif command -v vi >/dev/null 2>&1; then
@@ -167,11 +135,9 @@ fi
 subject="$(head -n1 "$input")"
 subject_len="${#subject}"
 
-# Format FIRST, unconditionally. Validation below reports a problem; it must
-# never decide whether the message reaches stdout, because filter mode is used
-# as `wrap-msg.sh < draft > message`. A validation failure that printed nothing
-# would leave an EMPTY file where the draft used to be, and the caller would
-# have no way to tell that from a successful format of an empty message.
+# Format FIRST, unconditionally: validation reports a problem, it never decides whether
+# the message reaches stdout. Filter mode is `wrap-msg.sh < draft > message`, so a
+# failure that printed nothing would leave an EMPTY file where the draft used to be.
 awk "$WRAP_AWK" "$input" > "$formatted" || {
     printf 'ERROR: could not format the message.\n' >&2
     exit 2
@@ -189,10 +155,8 @@ elif [[ "$subject_len" -gt "$SUBJECT_MAX" ]]; then
 fi
 
 if [[ "$MODE" == "check" ]]; then
-    # Two things are verified, because either can fail in practice: the subject
-    # convention above, and the FORMATTED body staying inside the width.
-    # Checking the input instead would miss an already-wrapped message with an
-    # over-long line, which is the state a bad paste leaves behind.
+    # Verify the FORMATTED body, not the input: an already-wrapped message with an
+    # over-long line is exactly the state a bad paste leaves behind.
     overlong="$(awk -v w="$WIDTH" 'length($0) > w { n++ } END { print n + 0 }' "$formatted")"
     if [[ "$overlong" -gt 0 ]]; then
         printf 'ERROR: %d formatted line(s) exceed %d characters.\n' "$overlong" "$WIDTH" >&2
@@ -212,8 +176,7 @@ if [[ "$MODE" == "check" ]]; then
     fi
 fi
 
-# Both modes print the formatted message. `--check` is a validator, but its
-# stdout is still the message so that a redirect cannot be emptied by a failed
+# Both modes print the formatted message, so a redirect cannot be emptied by a failed
 # check; the verdict is the exit code and the summary on stderr.
 cat "$formatted"
 exit "$rc"

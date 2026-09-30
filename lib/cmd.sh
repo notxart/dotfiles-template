@@ -38,17 +38,9 @@ set_feature_flag() {
     esac
 }
 
-# resolve_feature_flags — decide the effective flags.
-#
-# Precedence, highest first:
-#   1. an explicit command-line flag (already applied, marker set)
-#   2. an exported override (lets tests and users force a value)
-#   3. what this machine recorded in the manifest on its last install
-#   4. the compiled-in default, off
-#
-# Step 3 uses this only for the registry, but the same resolution is what lets
-# `update` re-apply the toolchain this machine actually chose, without the user
-# re-typing --with-git-tui every time.
+# resolve_feature_flags — an explicit flag wins, then an exported override, then
+# what this machine recorded on its last install, then the compiled default of
+# off. The manifest is what lets `update` keep the toolchain already chosen.
 resolve_feature_flags() {
     if [[ "${FLAG_GIT_TUI_SET:-0}" -eq 0 && "${FLAG_GIT_TUI_ENV:-0}" -eq 0 ]]; then
         FLAG_GIT_TUI="$(manifest_flag_get git_tui)"
@@ -100,9 +92,8 @@ cmd_install() {
     parse_args "$@"
     init_xdg_env
 
-    # Verify the paths this manager is about to install into are the same ones
-    # the user's shell will read. Runs before anything touches the system, so a
-    # divergence is reported rather than silently acted upon.
+    # Preflight: report a difference between the paths installed into and the
+    # paths the user's shell reads, rather than silently acting on it.
     xdg_assert_consistency --strict || return 1
 
     # The manifest is authoritative for what this machine already opted into;
@@ -118,14 +109,12 @@ cmd_install() {
     check_git_version
     install_pnpm
 
-    # Version Enforcement Verification
     ensure_tool_version "fzf" "fzf" "0.60" "install_fzf_fallback"
     ensure_tool_version "starship" "starship" "1.20.0" "install_starship_fallback"
 
     if [[ "$FLAG_GIT_TUI" -eq 1 ]]; then
-        # 0.20 is the floor because it is where `hunk update` appears. Asking for
-        # anything older installs a hunk that cannot keep itself current, which
-        # is the opposite of what a toolchain pin is for.
+        # 0.20 is where `hunk update` appears; an older hunk cannot keep itself
+        # current, which defeats the point of pinning it.
         ensure_tool_version "hunk" "hunk" "0.20.0" "install_hunk_fallback"
         ensure_tool_version "lazygit" "lazygit" "0.44.0" "install_lazygit_fallback"
     fi
@@ -136,11 +125,8 @@ cmd_install() {
 
     configure_fd_alias
 
-    # Convert legacy directory-level links BEFORE linking. With the file-level
-    # registry, every path underneath such a link resolves to a regular file
-    # and is therefore reported as blocked; the migration is what makes those
-    # paths linkable. It runs before link_setup so the same run can finish the
-    # job, and it is a no-op on a machine that never had directory links.
+    # A legacy directory link makes every path beneath it resolve to a regular
+    # file, which the registry reports as blocked. Convert before linking.
     if migrate_needed; then
         migrate_print_plan
         if [[ "${ASSUME_YES:-0}" -eq 1 ]]; then
@@ -155,9 +141,7 @@ cmd_install() {
     link_setup
     configure_gpg
 
-    # Only when the feature really is missing. The condition used to be `||`, so
-    # a machine that had asked for one of the two was told about both — advice to
-    # enable what was already enabled.
+    # Only when the feature really is missing: never advise enabling what is on.
     if [[ "$FLAG_GIT_TUI" -eq 0 && "$FLAG_WITH_DSH" -eq 0 ]]; then
         printf "\n"
         log_info "Tip: Run with '--with-git-tui' to enable the Lazygit/Hunk stack."
@@ -177,9 +161,8 @@ cmd_install() {
         log_info "Run 'source ~/.bashrc' or restart your terminal session to apply changes."
     fi
 
-    # Tell the user what to do next, in the terms they will actually meet.
-    # Nothing above this point moves or replaces a file, so anything the
-    # machine and the repository disagree about is still waiting.
+    # Nothing above this point moves or replaces a file, so anything the machine
+    # and the repository disagree about is still waiting.
     local pending="${LINK_SETUP_PENDING:-0}"
     if [[ "$pending" -gt 0 ]]; then
         printf '\n'

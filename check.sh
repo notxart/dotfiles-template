@@ -1,29 +1,46 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# check.sh — the repository's own verification, in one harness.
+# check.sh — the repository's own verification, in one harness. HOME is a sandbox
+# under .sandbox-e2e/: sudo, apt-get, the network and installable tools are stubs.
 #
-#   ./check.sh            the acceptance matrix: T1–T14, the wrapping-parity
-#                         guard, and the formatter guarantees. Exits non-zero
-#                         on the first thing that is not true.
-#   ./check.sh --report   one install against a throwaway HOME, then a report
-#                         of what it created. Exits 0; it is for looking, not
-#                         for judging.
-#
-#   T1  fresh install                  T8  local content wins (adopt)
-#   T2  second install is idempotent   T9  XDG mismatch refuses to install
-#   T3  an app's own file survives     T10 a renamed source leaves no orphan
-#   T4  an atomic rename is repaired   T11 update --dry-run changes nothing
-#   T5  directory-link migration       T12 manifest round-trip and migration
-#   T6  loop symlinks are found        T13 no TTY changes nothing, exits 2
-#   T7  sync verdicts + fail-closed    T14 a seeded file is never overwritten
-#
-# Nothing here touches the machine it runs on: HOME is a sandbox under
-# .sandbox-e2e/ (gitignored), and sudo, apt-get, the network and every tool the
-# manager would install are stubs that record their argv instead of running.
+#   ./check.sh [--report | --lint]   matrix (default), report, or shellcheck
 # ==============================================================================
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ==============================================================================
+# --lint judges the source tree, not the machine, so it runs before the sandbox
+# exists and leaves it alone. It is opt-in because shellcheck is not a
+# dependency: `./check.sh` itself must pass on a host that has never installed it.
+if [[ "${1:-}" == "--lint" && $# -eq 1 ]]; then
+    if ! command -v shellcheck >/dev/null 2>&1; then
+        printf 'shellcheck is not installed — nothing to lint with.\n\n' >&2
+        printf 'It is a contributor tool, not a dependency of this project: install\n' >&2
+        printf 'it however your system does (Debian/Ubuntu: `apt-get install shellcheck`)\n' >&2
+        printf 'and run `./check.sh --lint` again. `./check.sh` without flags does not\n' >&2
+        printf 'need it.\n' >&2
+        exit 2
+    fi
+    printf 'shellcheck %s\n' "$(shellcheck --version | awk '/^version:/ { print $2 }')"
+    rc=0
+    # One program, shared context: `-x --check-sourced` lints lib/*.sh as the
+    # files they are — sourced by manager.sh. Linting them on their own invents
+    # findings for every symbol manager.sh provides.
+    ( cd "$REPO_ROOT" && shellcheck -x --check-sourced --severity=warning manager.sh ) || rc=1
+    # Deliberately without -x: the rc.d drop-ins source a system bash_completion
+    # this tree does not own, and following it reports on the host instead.
+    ( cd "$REPO_ROOT" && shellcheck --severity=warning \
+        check.sh config/git/wrap-msg.sh config/git/hooks/* \
+        config/bash/main.sh config/bash/rc.d/*.sh .bashrc ) || rc=1
+    if [[ "$rc" -eq 0 ]]; then
+        printf 'lint: clean\n'
+    else
+        printf 'lint: findings above\n' >&2
+    fi
+    exit "$rc"
+fi
+
 SANDBOX="$REPO_ROOT/.sandbox-e2e/check"
 rm -rf "$SANDBOX"
 mkdir -p "$SANDBOX/home" "$SANDBOX/bin" "$SANDBOX/pmbin" "$SANDBOX/versions"
@@ -131,29 +148,19 @@ link_count() { find "$HOME" -type l -not -path "$PNPM_HOME/*" -not -path "$HOME/
 stage_repo "$SANDBOX/repo"
 
 # ==============================================================================
-# One harness, two questions.
-#
-#   ./check.sh            "does the manager behave the way it promises?" — the
-#                         acceptance matrix below; exits non-zero on failure.
-#   ./check.sh --report   "what did it actually do?" — one install, then a
-#                         topology report to read; exits 0.
-#
-# Both run against a throwaway HOME under .sandbox-e2e/ (gitignored) with
-# stubbed privileged commands and stubbed tools, so neither touches the machine
-# it runs on. They share this file because they shared a harness, and two
-# copies of the same setup drift: the copy that is not being exercised is the
-# one that rots.
+# Mode handling. --lint was handled above, before the sandbox existed; what runs
+# below is the acceptance matrix or one install plus a report.
 # ==============================================================================
 MODE="acceptance"
 case "${1:-}" in
     ""|--acceptance) ;;
     --report)        MODE="report" ;;
     -h|--help)
-        printf 'usage: %s [--report]\n\n  (no flag)  run the acceptance assertions\n  --report   run one install and write .sandbox-e2e/check/report/report.txt\n' \
+        printf 'usage: %s [--report | --lint]\n\n  (no flag)  run the acceptance assertions\n  --report   run one install and write .sandbox-e2e/check/report/report.txt\n  --lint     run shellcheck over the source tree (needs shellcheck installed)\n' \
             "$(basename "$0")"
         exit 0
         ;;
-    *) printf 'usage: %s [--report]\n' "$(basename "$0")" >&2; exit 2 ;;
+    *) printf 'usage: %s [--report | --lint]\n' "$(basename "$0")" >&2; exit 2 ;;
 esac
 
 if [[ "$MODE" == "report" ]]; then
@@ -195,14 +202,22 @@ fi
 
 # ==============================================================================
 echo
+# Below: T1 fresh install, T2 a second install is idempotent, T3 an app's own file
+# survives, T4 an atomic rename is repaired, T5 directory-link migration, T6 loop
+# symlinks are found, T7 sync verdicts + fail-closed, T8 local content wins, T9 the XDG
+# mismatch refusal, T10 a renamed source leaves no orphan, T11 update --dry-run, T12
+# manifest round-trip, T13 no TTY changes nothing, T14 a seeded file is never overwritten.
 echo "### T1  a fresh install links files, and every config directory is real"
 mgr "$SANDBOX/repo" install --with-git-tui --with-dsh > "$SANDBOX/t1.out" 2>&1
 check "install succeeds" "1" "$(grep -c 'Dotfiles Setup Completed Successfully' "$SANDBOX/t1.out")"
 check "the registry's links were created" "22" "$(link_count)"
+# shellcheck disable=SC2088  # assertion label, not a path
 check "~/.config/git is a real directory" "directory" \
     "$([[ -L "$XDG_CONFIG_HOME/git" ]] && echo symlink || echo directory)"
+# shellcheck disable=SC2088  # assertion label, not a path
 check "~/.config/bash is a real directory" "directory" \
     "$([[ -L "$XDG_CONFIG_HOME/bash" ]] && echo symlink || echo directory)"
+# shellcheck disable=SC2088  # assertion label, not a path
 check "~/.config/hunk is a real directory" "directory" \
     "$([[ -L "$XDG_CONFIG_HOME/hunk" ]] && echo symlink || echo directory)"
 # A file directly under ~/.config (starship.toml) is a link by design; what must
@@ -271,6 +286,7 @@ ln -sfn "$SANDBOX/legacy/config/vim" "$XDG_CONFIG_HOME/vim"
 printf 'set number\n' > "$SANDBOX/legacy/config/vim/foreign.lua"
 mgr "$SANDBOX/legacy" install --yes > "$SANDBOX/t5.out" 2>&1
 check "the migration was planned" "1" "$(grep -c 'convert: .config/vim' "$SANDBOX/t5.out")"
+# shellcheck disable=SC2088  # assertion label, not a path
 check "~/.config/vim is now a real directory" "directory" \
     "$([[ -L "$XDG_CONFIG_HOME/vim" ]] && echo symlink || echo directory)"
 check "the application's file is back at the destination" "yes" \
@@ -516,6 +532,22 @@ check "the subject survives" "1" "$(grep -c 'deliberately far longer' "$SANDBOX/
 check "the body survives" "1" "$(grep -c 'body paragraph that must survive' "$SANDBOX/reject.out")"
 check "and the reason is on stderr" "1" "$(grep -c 'subject is' "$SANDBOX/reject.err")"
 
+# A plain `git commit` from an automation must not be able to start an editor there is
+# no terminal for: that editor blocks until someone kills it. The stub vim leaves a
+# marker instead of sleeping, so "did it refuse, or did it launch an editor?" is
+# measurable without timing anything, whatever terminal this harness was started from.
+mkdir -p "$SANDBOX/editor-stub"
+printf '#!/bin/sh\nprintf "INVOKED\\n" >> "%s/vim-invoked"\nexit 0\n' "$SANDBOX" > "$SANDBOX/editor-stub/vim"
+chmod +x "$SANDBOX/editor-stub/vim"
+rm -f "$SANDBOX/vim-invoked"
+printf 'feat(x): a subject\n\nbody\n' > "$SANDBOX/guard.txt"
+rc=0
+env -u VISUAL -u EDITOR PATH="$SANDBOX/editor-stub:$PATH" \
+    "$WRAP" --edit "$SANDBOX/guard.txt" </dev/null >/dev/null 2> "$SANDBOX/guard.err" || rc=$?
+check "no terminal and no editor: the formatter refuses" "1" "$rc"
+check "and never starts an editor" "0" "$([[ -f "$SANDBOX/vim-invoked" ]] && echo 1 || echo 0)"
+check "and names the variable to set" "1" "$(grep -c 'VISUAL or EDITOR' "$SANDBOX/guard.err" || true)"
+
 echo
 echo "### Repository rules — the promises the documents make"
 # config/vim/vimrc used to carry its own `fold -s -w 72`, and Vim's textwidth a
@@ -615,5 +647,7 @@ echo
 echo "NOT RUN HERE: the interactive prompts ([a/d/q], y/N). This sandbox has no"
 echo "PTY, so T7's and T13's fail-closed paths are asserted instead. The prompts"
 echo "themselves are run by hand — see the note at the end of the step."
+echo
+echo "Shellcheck is available separately: ./check.sh --lint"
 echo
 [[ "$FAIL" -eq 0 ]]

@@ -1,11 +1,9 @@
 #!/bin/sh
 # ==============================================================================
-# Global commit-msg Dispatcher
-# Path: ~/.config/git/hooks/commit-msg
-# Description: core.hooksPath redirects ALL hooks to this global directory,
-#              which would silently disable repository-local hooks. This
-#              dispatcher restores them: a repo hook stored as
-#              .git/hooks/commit-msg.local (executable) is chained transparently.
+# Global commit-msg dispatcher — ~/.config/git/hooks/commit-msg
+#
+# core.hooksPath redirects ALL hooks to this directory, which would silently disable
+# repository-local ones; this chains .git/hooks/commit-msg.local (executable) instead.
 # ==============================================================================
 
 HOOK_NAME="$(basename "$0")"

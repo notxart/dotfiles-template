@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # This file is for setting general environment variables.
 
 # Set the default editor

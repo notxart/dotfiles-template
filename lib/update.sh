@@ -3,24 +3,8 @@
 # ==============================================================================
 # lib/update.sh — Bring the toolchain this machine opted into up to date
 #
-# `install` provisions a toolchain and `config sync` reconciles configuration;
-# neither answers "my tools are old". This module does the third thing: it runs
-# each tool's own update mechanism, once, for the whole toolchain, and reports
-# what changed.
-#
-# What it deliberately does NOT do:
-#   * it never links, migrates, adopts or reconciles. An update changes
-#     versions, not the relationship between this machine and the repository.
-#   * it never installs a tool that is absent. That is install's job: a missing
-#     tool needs a decision (--with-git-tui, --with-dsh), not an upgrade.
-#   * it never shadows a distribution package. When the running binary lives
-#     outside $HOME, the distribution owns that path, and dropping a second copy
-#     into ~/.local/bin would decide which one wins by PATH order. Without
-#     elevation that is reported, not worked around.
-#   * it never asks for a password. install may, because the user just asked for
-#     an install; update runs several tools in a row, so a password prompt would
-#     arrive with no context. System-owned tools are updated only when
-#     elevation is already available (see update_pm_state).
+# Runs each tool's own updater once and reports what changed. It never links or
+# installs, never shadows a distribution package, and never asks for a password.
 # ==============================================================================
 
 # Update State
@@ -41,22 +25,13 @@ UPDATE_HUNK_SELF=""
 UPDATE_MECH_KIND=""
 UPDATE_MECH_DESC=""
 UPDATE_MECH_CMD=()
-UPDATE_MECH_PKG=""
 UPDATE_MECH_FALLBACK=""
 
 # tool | distribution package | self-update command | fallback installer
 #
-# One row per tool, in the order update touches them: pnpm comes first because
-# hunk and dsh are installed through it. An empty field means that mechanism
-# does not exist for that tool.
-#
-# A row may carry both a self-updater and a fallback. That pairing is not
-# redundant: `pnpm self-update` is the right way to move pnpm and cannot repair
-# a broken one, so a failure falls through to the installer that put it there.
-#
-# The distribution package column is empty for node: the name differs across
-# distributions (nodejs, node) and install provisions node through pnpm, so a
-# system-owned node is reported rather than upgraded under a guessed name.
+# One row per tool, in the order update touches them; an empty field means the
+# mechanism does not exist. A self-updater paired with a fallback is not redundant:
+# `pnpm self-update` moves a working pnpm but cannot repair a broken one.
 readonly -a UPDATE_TABLE=(
     "pnpm||pnpm self-update|install_pnpm_standalone"
     "node||pnpm runtime set node lts -g|"
@@ -129,15 +104,12 @@ update_parse_args() {
 
 # --- Tool Selection -----------------------------------------------------------
 
-# update_selected_tools — the tools this machine asked for.
-#
-# It mirrors what install provisions, not what happens to be on the machine:
-# the manifest flags decide. A hunk the user installed by hand is therefore not
-# touched unless they ask for it by name with --only.
+# update_selected_tools — the tools this machine asked for, mirroring what install
+# provisions rather than what happens to be present: a hunk installed by hand is
+# left alone unless it is named with --only.
 update_selected_tools() {
-    # An explicit --only answers the question outright, including for a tool
-    # this machine never opted into. That is the point of naming one: it is how
-    # a tool installed by hand gets brought up to date.
+    # An explicit --only answers outright, including for a tool this machine never
+    # opted into: that is how something installed by hand gets updated.
     if [[ "${#UPDATE_ONLY[@]}" -gt 0 ]]; then
         printf '%s\n' "${UPDATE_ONLY[@]}"
         return 0
@@ -164,13 +136,9 @@ update_version() {
     printf '%s\n' "$version"
 }
 
-# update_is_system_owned <cmd> — true when the command the shell would run is
-# owned by the distribution rather than by this user.
-#
-# $HOME alone is not the test. PNPM_HOME and XDG_DATA_HOME are user-owned
-# locations wherever they happen to point, and pnpm puts its global binaries in
-# the first of them; calling those "the system's" would refuse to update the
-# tools this repository installed on a machine that moved its XDG directories.
+# update_is_system_owned <cmd> — true when the command the shell would run belongs
+# to the distribution rather than to this user. $HOME alone is not the test: a
+# machine that moved its XDG directories still owns PNPM_HOME and XDG_DATA_HOME.
 update_is_system_owned() {
     local path
     path="$(command -v "$1" 2>/dev/null || true)"
@@ -189,14 +157,9 @@ update_is_pnpm_managed() {
     [[ -n "$path" && ( "$path" == "${PNPM_HOME:-$HOME/.local/share/pnpm}"/* ) ]]
 }
 
-# update_hunk_is_standalone — true when hunk came from this repository's
-# standalone installer rather than from a package manager.
-#
-# That installer places hunk under $XDG_DATA_HOME/hunk and points
-# ~/.local/bin/hunk at it, so the command the shell finds is the SYMLINK, not
-# the file. The comparison therefore has to follow it: testing the link's own
-# path would classify every real standalone install as a package-manager one,
-# and `hunk update` does not recognise a location it did not create.
+# update_hunk_is_standalone — true when hunk came from this repository's standalone
+# installer. That installer points ~/.local/bin/hunk at $XDG_DATA_HOME/hunk, so the
+# command the shell finds is the SYMLINK: the comparison has to follow it.
 update_hunk_is_standalone() {
     local path resolved
     path="$(command -v "$1" 2>/dev/null || true)"
@@ -205,15 +168,9 @@ update_hunk_is_standalone() {
     [[ "$resolved" == "${XDG_DATA_HOME:-$HOME/.local/share}/hunk/bin/"* ]]
 }
 
-# update_self_applicable <tool> — whether the tool's own updater applies here.
-#
-# Three tools cannot answer that from the table alone. node is provisioned by
-# pnpm only when pnpm manages it; upgrading a distribution's node through pnpm
-# would create a second runtime that quietly takes precedence. hunk gained its
-# own updater in 0.20, so an older hunk is asked rather than assumed — and a
-# standalone hunk is excluded even when it is new enough, because its location
-# is one `hunk update` will not touch. The answer is cached: the plan, the
-# command list and the run all resolve the same tool.
+# update_self_applicable <tool> — whether the tool's own updater applies here. node
+# counts only when pnpm manages it, hunk only from 0.20 and not as a standalone
+# install, whose location `hunk update` will not touch. The answer is cached.
 update_self_applicable() {
     case "$1" in
         node) update_is_pnpm_managed node ;;
@@ -234,13 +191,8 @@ update_self_applicable() {
     esac
 }
 
-# update_pm_state — establish package-manager state WITHOUT prompting.
-#
-# Both halves live in lib/packages.sh: detection answers which package manager
-# this is, and acquire_privileges --non-interactive answers whether packages can
-# be installed without asking. That flag is the whole point: `update` runs a
-# whole toolchain in a row, so a password prompt arriving in the middle of it
-# would have no context.
+# update_pm_state — package-manager state without prompting: which manager this is,
+# and whether packages can be installed without asking.
 update_pm_state() {
     [[ "$UPDATE_PM_READY" -eq 1 ]] && return 0
     UPDATE_PM_READY=1
@@ -266,24 +218,16 @@ update_pm_refresh_once() {
     return 0
 }
 
-# update_resolve <tool> — decide how this tool would be updated.
-#
-# Order, and the reason for it:
-#   1. the tool's own updater, when it has one. It knows how it was installed
-#      (npm, brew, curl), which nothing outside the tool can know reliably.
-#   2. the distribution's package manager, when the distribution owns the file
-#      and elevation is already available.
-#   3. this repository's installer, for everything installed under $HOME.
-#
-# A tool may also carry a fallback alongside a self-updater, which update_one
-# reaches for only when the first attempt fails.
+# update_resolve <tool> — how this tool would be updated: its own updater first (it
+# knows how it was installed), then the distribution's package manager when it owns
+# the file and elevation is available, then this repository's installer for anything
+# under $HOME. update_one reaches the fallback only when the first attempt fails.
 update_resolve() {
     local tool="$1" row candidate pkg self fallback
 
     UPDATE_MECH_KIND=""
     UPDATE_MECH_DESC=""
     UPDATE_MECH_CMD=()
-    UPDATE_MECH_PKG=""
     UPDATE_MECH_FALLBACK=""
 
     row=""
@@ -300,7 +244,6 @@ update_resolve() {
     fi
 
     IFS='|' read -r _ pkg self fallback <<< "$row"
-    UPDATE_MECH_PKG="$pkg"
     UPDATE_MECH_FALLBACK="$fallback"
 
     if ! command_exists "$tool"; then
@@ -343,11 +286,9 @@ update_resolve() {
 # --- Acting -------------------------------------------------------------------
 
 update_record() {
-    # Fields are separated by '|', not a tab, and that is not cosmetic: a tab is
-    # an IFS *whitespace* character, so `read` collapses runs of them and strips
-    # leading ones. A row with an empty field — a tool whose version could not be
-    # read, or one that is not installed — would lose that column and shift every
-    # value after it one place to the left.
+    # Fields are '|'-separated, not tab: a tab is IFS *whitespace*, so `read`
+    # collapses runs and strips leading ones, and a row with an empty field would
+    # lose that column and shift every value after it one place left.
     UPDATE_ROWS+=("$(printf '%s|%s|%s|%s' "$1" "$2" "$3" "$4")")
 }
 
@@ -377,19 +318,16 @@ update_one() {
             "${UPDATE_MECH_CMD[@]}" || rc=$?
             ;;
         fallback)
-            # The installers are written to abort an INSTALL (they call exit 1),
-            # not to return a status. A subshell turns that abort into a value
-            # this loop can report and survive, so one failing tool does not
-            # take the rest of the toolchain down with it.
+            # The installers are written to abort an INSTALL (they call exit 1), not
+            # to return a status. A subshell turns that abort into a value this loop
+            # can report and survive, so one failing tool does not take the rest down.
             ( "${UPDATE_MECH_CMD[@]}" ) || rc=$?
             ;;
     esac
 
-    # A tool that carries both mechanisms gets one second chance. `pnpm
-    # self-update` is the right way to move a working pnpm and cannot repair a
-    # broken one; the installer that put it there can. Without this, a failed
-    # self-update is reported as a tool that could not be updated when a way to
-    # update it was sitting one column away in the table.
+    # A tool that carries both mechanisms gets one second chance: `pnpm self-update`
+    # moves a working pnpm but cannot repair a broken one, and the installer that put
+    # it there can. Without this, a failure hides a fix one column away in the table.
     if [[ "$rc" -ne 0 && -n "$UPDATE_MECH_FALLBACK" && "$UPDATE_MECH_KIND" != "fallback" ]]; then
         log_warn "$tool: ${UPDATE_MECH_DESC%% *} failed; retrying with $UPDATE_MECH_FALLBACK."
         rc=0
@@ -403,9 +341,8 @@ update_one() {
         UPDATE_FAILED=$((UPDATE_FAILED + 1))
         log_warn "$tool: update command failed (exit $rc)."
     elif [[ -z "$before" ]]; then
-        # The command ran but this tool reports its version in a shape that
-        # could not be read, so "current" would be an assertion the run cannot
-        # support. Say only what happened.
+        # The command ran, but this tool reports its version in a shape that could
+        # not be read, so "current" would assert more than the run can support.
         status="ran"
     elif [[ "$after" == "$before" ]]; then
         status="current"
@@ -481,9 +418,8 @@ update_run() {
         return 0
     fi
 
-    # Same fail-closed rule as config sync: without a terminal there is nobody
-    # to confirm with, so the safe answer is to change nothing and print the
-    # commands instead.
+    # Fail-closed like config sync: with no terminal there is nobody to confirm
+    # with, so change nothing and print the commands instead.
     if [[ "${ASSUME_YES:-0}" -ne 1 ]] && ! is_tty; then
         printf '\n'
         log_warn "No terminal: nothing was changed."

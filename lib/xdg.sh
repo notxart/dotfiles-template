@@ -3,18 +3,11 @@
 # ==============================================================================
 # lib/xdg.sh — XDG initialization, manifest, and cross-layer value validation
 #
-# Scope note: this module only prepares paths for the *manager's own* process.
-# It never sources the user's shell rc.d files. `xdg_parse_repo_env` reads them
-# as plain text for verification only — see `xdg_assert_consistency`.
-#
-# The manifest is the manager's record of what it owns, plus the feature flags
-# chosen at install time. It is what lets `update` and `config` know about a
-# machine without re-asking, and what distinguishes "dotfiles owns this path"
-# from "some application wrote this".
+# Scope: this module prepares paths for the manager's OWN process and reads the rc.d
+# files as text — it never sources them. The manifest records what dotfiles owns.
 # ==============================================================================
 
-# Vars the manager and config/bash/rc.d/*.sh both define. They must agree:
-# a divergence installs files where the user's shell will never look for them.
+# Vars both layers define; a divergence installs files where the shell never looks.
 readonly MANAGER_SHARED_VARS=(
     XDG_CONFIG_HOME
     XDG_DATA_HOME
@@ -69,18 +62,13 @@ backup_root() {
     printf '%s\n' "$(state_dir)/backups"
 }
 
-# How many past runs to keep. Every operation that can replace a file backs the
-# file up first; without a limit those copies accumulate forever, and an
-# unbounded backup directory is one nobody ever opens.
+# How many past runs to keep: every operation that can replace a file backs it up
+# first, and without a limit those copies accumulate forever.
 readonly BACKUP_KEEP=10
 
-# backup_dir_current — this run's backup directory, created on first call.
-#
-# The caller MUST invoke this once per run (backup_begin does) before calling
-# backup_path. It cannot be left implicit inside backup_path: callers capture
-# that function's output with $( ), which runs it in a SUBSHELL, so a variable
-# assigned there never reaches the next call and every file would land in a
-# directory of its own.
+# backup_dir_current — this run's backup directory, created on first call. It must
+# run before backup_path: callers capture backup_path's output with $( ), which runs
+# in a subshell, so a variable assigned there would never reach the next call.
 backup_dir_current() {
     if [[ -z "${BACKUP_RUN_DIR:-}" ]]; then
         BACKUP_RUN_DIR="$(backup_root)/$(date +%Y%m%d_%H%M%S)"
@@ -89,9 +77,8 @@ backup_dir_current() {
     printf '%s\n' "$BACKUP_RUN_DIR"
 }
 
-# backup_begin — start a backup run. Safe to call more than once; only the first
-# call in a run creates the directory, so every file touched by one command is
-# recoverable together and under a single timestamp a user can find.
+# backup_begin — start a backup run. Only the first call creates the directory, so
+# every file one command touches is recoverable under a single timestamp.
 backup_begin() {
     backup_dir_current >/dev/null
     return 0
@@ -112,10 +99,9 @@ backup_path() {
         mkdir -p "$dir" || return 1
     fi
 
-    # The backup MIRRORS the home layout instead of flattening it:
+    # Mirrors the home layout rather than flattening it:
     #   ~/.config/git/hooks/commit-msg -> <run>/.config/git/hooks/commit-msg
-    # Two files with the same basename therefore cannot collide, the original
-    # name is still findable, and restoring is a plain `cp -a <run>/.config ~/`.
+    # Same basenames cannot collide, and restoring is `cp -a <run>/.config ~/`.
     local rel
     case "$path" in
         "$HOME"/*) rel="${path#"$HOME"/}" ;;
@@ -124,11 +110,9 @@ backup_path() {
     dest="$dir/$rel"
     mkdir -p "$(dirname "$dest")" || return 1
 
-    # A symlink is COPIED THROUGH, not copied as a link. `cp -a` would preserve
-    # it, so the "backup" would still point at the live file it was meant to
-    # protect — useless the moment that file is replaced, which is exactly the
-    # situation a backup exists for. The copy is therefore the bytes the link
-    # resolved to.
+    # A symlink is copied THROUGH, not as a link: `cp -a` would preserve it, so the
+    # "backup" would still point at the live file it was meant to protect — useless
+    # the moment that file is replaced, which is when a backup matters.
     if [[ -L "$path" ]]; then
         cp -L --preserve=mode,timestamps "$path" "$dest" 2>/dev/null || \
             cp -L "$path" "$dest" 2>/dev/null || return 1
@@ -247,14 +231,8 @@ manifest_flag_get() {
 # ==============================================================================
 # Cross-layer value validation
 #
-# The manager and config/bash/rc.d/*.sh derive the same paths independently.
-# They must agree, or the manager installs into a directory the user's shell
-# never reads (e.g. DSH_HOME: skills land where `dsh` never looks).
-#
-# `xdg_parse_repo_env` reads the rc.d files as TEXT. It never sources them:
-# rc.d/00-xdg.sh contains `export GPG_TTY=$(tty)`, and `tty` fails in a
-# non-interactive process like this one. Sourcing them would also execute
-# arbitrary user code (99-local.sh) inside the installer.
+# The manager and rc.d/*.sh derive the same paths independently and must agree.
+# rc.d is read as TEXT: `tty` would fail here, and 99-local.sh would execute.
 # ==============================================================================
 
 # xdg_parse_repo_env — print "VAR<TAB>value" for each shared var assigned in
@@ -296,9 +274,8 @@ xdg_parse_repo_env() {
                 continue
             fi
 
-            # Expand ${VAR:-default} / ${VAR-default} using the CURRENT
-            # environment. $HOME therefore resolves to whatever HOME this
-            # process has — which is exactly the context we compare in.
+            # Expand ${VAR:-default} against the CURRENT environment: $HOME is
+            # whatever this process has, which is the context being compared.
             # shellcheck disable=SC2016
             value="$(eval "printf '%s' \"${rest}\"" 2>/dev/null)" || value="<skip:unexpanded>"
             printf '%s\t%s\n' "$name" "$value"
@@ -306,11 +283,9 @@ xdg_parse_repo_env() {
     done
 }
 
-# xdg_assert_consistency [--strict]
-# Compares the repository's declared values against the manager's own.
-# Returns 0 when consistent, 1 when they diverge. Prints the manager's value
-# and the shell's value side by side, because the user needs to know which one
-# is currently in effect before deciding what to change.
+# xdg_assert_consistency [--strict] — 0 when the repository's declared values and
+# the manager's own agree, 1 when they diverge. Both sides are printed, because the
+# user has to know which one is in effect before changing anything.
 xdg_assert_consistency() {
     local strict=0
     [[ "${1:-}" == "--strict" ]] && strict=1

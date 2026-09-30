@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # ==============================================================================
-# lib/shell.sh — Login shell management, Git feature validation, GPG hardening
+# lib/shell.sh — Login shell choice and the Git version floor.
 #
-# Moved verbatim from the original single-file installer (Step 1: unchanged).
+# macOS still ships Bash 3.2, so everything here stays 3.2-compatible.
 # ==============================================================================
 
 check_git_version() {
@@ -26,19 +26,9 @@ check_git_version() {
     fi
 }
 
-# ==============================================================================
-# Login Shell & Bash Version Management
-# ==============================================================================
-
-# macOS ships /bin/bash 3.2 (Apple froze it under GPLv3) while ble.sh
-# recommends Bash >= 4.0 — auto-complete and menu-filter are 4.0+ features.
-# The installer never replaces /bin/bash: Homebrew's bash installs in parallel
-# at $(brew --prefix)/bin/bash. The login shell is switched automatically ONLY
-# when it is the system /bin/bash; zsh/fish/other login shells are never
-# touched — those users get a one-time manual hint in the final message
-# instead (BASH_SHELL_GUIDANCE). Everything here stays Bash-3.2-compatible on
-# purpose: this installer itself may be running under /bin/bash 3.2 on macOS.
-
+# macOS freezes /bin/bash at 3.2 while ble.sh wants >= 4.0, so Homebrew's bash is
+# installed alongside and the login shell is switched only when it is the system
+# /bin/bash. zsh/fish users are pointed at the manual command, never changed.
 get_login_shell() {
     local user="${SUDO_USER:-$(whoami)}"
 
@@ -49,10 +39,8 @@ get_login_shell() {
     fi
 }
 
-# macOS only: one-time login-shell switch with verification. The /etc/shells
-# append may be silently rejected (SIP/permissions), so verify with grep
-# before chsh, then re-verify the result via dscl. Failures degrade to a
-# manual instruction set in BASH_SHELL_GUIDANCE instead of exiting.
+# macOS only: /etc/shells may reject the append (SIP, permissions), so verify
+# before chsh and again after it. Failure degrades to guidance, not an exit.
 switch_login_shell() {
     local target="$1" current="$2" user="${SUDO_USER:-$(whoami)}" verify
 
@@ -93,8 +81,7 @@ ensure_bash_shell() {
     if [[ "$(uname -s)" == "Darwin" && "$PM_STRATEGY" == "brew" ]]; then
         brew_bash="$(brew --prefix)/bin/bash"
 
-        # The installer runs with the user's interactive bash; if that is
-        # still the ancient 3.2, install Homebrew bash (idempotent).
+        # Idempotent: only when this shell is still the 3.2 ble.sh cannot use.
         if [[ ${BASH_VERSINFO[0]} -lt 4 ]] && [[ "$login_shell" != "$brew_bash" ]]; then
             log_step "Upgrading Bash for ble.sh (system bash is 3.2; ble.sh recommends >= 4.0)"
             "${PM_INSTALL_CMD[@]}" bash

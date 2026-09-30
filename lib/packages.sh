@@ -3,26 +3,17 @@
 # ==============================================================================
 # lib/packages.sh — Distribution detection and system package provisioning
 #
-# System packages are the OPTIONAL half of an install: the links, the manifest
-# and every `config` subcommand work entirely in the user's own directories and
-# need no privileges at all. This module therefore degrades instead of aborting,
-# so a container, a locked-down machine or a machine without sudo still gets a
-# usable dotfiles installation.
+# System packages are the OPTIONAL half of an install: links, the manifest and
+# `config` need no privileges, so this module degrades instead of aborting.
 # ==============================================================================
 
-# PM_PRIVILEGED — 1 when system packages can actually be installed.
-#
-# Set by acquire_privileges, never by detect_environment. Detection answers
-# "which package manager is this", which needs no privileges; being allowed to
-# use it is a separate question, and one that may cost the user a password, so it
-# is asked only at the point where a package is about to be installed. Probing
-# during detection meant an install that only creates links could stop at a
-# password prompt for work it was never going to do.
+# PM_PRIVILEGED — 1 when system packages can actually be installed. Detection
+# answers "which package manager is this"; being allowed to use it is a separate
+# question that may cost a password, so it is asked only when about to install.
 PM_PRIVILEGED=0
 
 detect_environment() {
-    # detect_environment() must never exit: it runs on every install, including
-    # ones that only need links. It records what is POSSIBLE instead.
+    # Never exits: it runs on every install and records what is POSSIBLE.
     if command_exists apt-get; then
         PM_STRATEGY="apt"
         PM_UPDATE_CMD=("sudo" "apt-get" "update")
@@ -53,14 +44,9 @@ detect_environment() {
     log_info "Package Manager Strategy: $PM_STRATEGY"
 }
 
-# acquire_privileges [--non-interactive] — decide whether packages can be
-# installed, and set PM_PRIVILEGED accordingly.
-#
-# The default form may ask for a password, because the caller has already
-# decided that something needs installing. --non-interactive never asks: sudo
-# must already work without a prompt, or Homebrew is present. `update` uses that
-# form, since it runs a whole toolchain in a row and a prompt arriving in the
-# middle of it would have no context.
+# acquire_privileges [--non-interactive] — may a package be installed, and set
+# PM_PRIVILEGED. The default form may prompt; --non-interactive never does, and is
+# what `update` uses, since a mid-run prompt would arrive without context.
 acquire_privileges() {
     local noninteractive=0
     [[ "${1:-}" == "--non-interactive" ]] && noninteractive=1
@@ -91,10 +77,8 @@ acquire_privileges() {
 install_base_packages() {
     log_step "Installing Base System Packages"
 
-    # Ask the cheap question first. A machine with no package manager has
-    # nothing to elevate for, and testing the strategy before the privilege
-    # keeps acquire_privileges — the only function here that can prompt — from
-    # running at all in that case.
+    # Test the strategy before the privilege: acquire_privileges is the only
+    # prompt here, and a machine with no package manager has nothing to elevate.
     if [[ "${PM_STRATEGY:-none}" == "none" ]] || ! acquire_privileges; then
         log_info "Skipped: system packages cannot be installed in this environment."
         log_info "The dotfiles links, the manifest and 'config' do not need them."
@@ -116,14 +100,9 @@ install_base_packages() {
     log_success "Base system packages processed."
 }
 
-# install_packages_best_effort <pkg>... — install what exists, report what does not.
-#
-# The list mixes names that exist nearly everywhere with names that are
-# distribution-specific, and apt and dnf abort the WHOLE transaction when one
-# name is unknown. A single call therefore used to leave a machine with none of
-# the packages because of one of them. One transaction is still tried first,
-# because it is faster and lets the package manager resolve everything together;
-# only when it fails is the list retried one package at a time.
+# install_packages_best_effort <pkg>... — install what exists, report what does
+# not. apt and dnf abort the whole transaction over one unknown name, so a failed
+# batch is retried one package at a time.
 install_packages_best_effort() {
     local -a pkgs=("$@")
     local -a missing=()

@@ -3,12 +3,8 @@
 # ==============================================================================
 # lib/config.sh — Config reconciliation between ~/.config and this repository
 #
-# Step 3 implements the read-only half: `config status`. It reports what the
-# registry links, what state each record is in, and whether the machine still
-# carries damage from the original installer (loop symlinks, orphaned records).
-#
-# Still to come in Step 6: sync / adopt / ignore / restore, the interactive
-# reconciliation table, and the `[l]ocal` two-stage confirmation.
+# `config status` reports; `config sync` shows what differs and asks before it
+# replaces anything. Only sync, adopt, ignore and restore can move a file.
 # ==============================================================================
 
 # Counters shared with the status renderer.
@@ -31,11 +27,9 @@ config_status() {
             continue
         fi
         health="$(link_health "$src" "$dest")"
-        # A seed destination holding a real file is the INTENDED end state: the
-        # file is copied once and belongs to the machine from then on, which is
-        # exactly why config_reconcile_items skips seed entries. Reporting it as
-        # blocked made a correctly installed machine look like it needed
-        # attention on every run, which is how a real warning gets ignored.
+        # A seed destination holding a real file is the INTENDED end state — copied
+        # once, then owned by the machine — which is why reconcile skips seeds.
+        # Reporting it as blocked made a healthy machine look like it needed work.
         if [[ "$mode" == "seed" && "$health" == "$LINK_STATE_BLOCKED" ]]; then
             health="seeded"
         fi
@@ -55,9 +49,8 @@ config_status() {
     printf '  %-10s %d\n' "blocked" "$n_blocked"
     CONFIG_STATUS_ISSUES=$((n_absent + n_stale + n_blocked))
 
-    # Records whose source vanished from the repository. Reported even when the
-    # cause was a flag being turned off: a silently dropped record is how links
-    # rot.
+    # Records whose source vanished from the repository, including via a flag being
+    # turned off: a silently dropped record is how links rot.
     local orphans
     orphans="$(link_find_orphans || true)"
     if [[ -n "$orphans" ]]; then
@@ -69,9 +62,8 @@ config_status() {
         done <<< "$orphans"
     fi
 
-    # Damage left by the original installer: `ln -sf` follows a symlink to a
-    # directory, so running the installer from a second clone injected links
-    # such as config/bash/bash -> (other clone)/config/bash.
+    # Damage from the original installer: `ln -sf` follows a symlink to a directory,
+    # so running it from a second clone injected links like bash -> (other clone).
     local loops
     loops="$(link_find_loops)"
     if [[ -n "$loops" ]]; then
@@ -83,12 +75,9 @@ config_status() {
         done <<< "$loops"
     fi
 
-    # The repository's OWN tracked git configuration, which is the file most
-    # likely to carry a secret by accident: it is synced to every machine the
-    # user owns, and `credential.helper = store` or a pasted token would be
-    # published the moment this repository is. Checked here rather than in
-    # `install` because it is a property of the repository, not of the machine,
-    # and this is the command a user runs to ask "is anything wrong?".
+    # The repository's OWN tracked git configuration, the file most likely to carry
+    # a secret by accident: it is synced to every machine the user owns, so
+    # `credential.helper = store` or a pasted token would be published with it.
     local git_conf leak line kind detail
     for git_conf in "$SCRIPT_DIR"/config/git/*.ini; do
         [[ -f "$git_conf" ]] || continue
@@ -112,9 +101,8 @@ config_status() {
         return 0
     fi
     log_warn "$CONFIG_STATUS_ISSUES item(s) need attention."
-    # $SCRIPT_NAME is the ENTRY POINT (manager.sh). Deriving it from
-    # BASH_SOURCE here would name the sourced module instead, telling the user
-    # to run a file that is not meant to be executed directly.
+    # $SCRIPT_NAME is the ENTRY POINT (manager.sh); deriving it from BASH_SOURCE
+    # here would name the sourced module, which is not meant to be run directly.
     log_info "Run '${SCRIPT_NAME:-manager.sh} config sync' to see what needs a decision."
     return 2
 }
@@ -122,37 +110,21 @@ config_status() {
 # ==============================================================================
 # Reconciliation
 #
-# The model is three layers, and the split is what keeps each one honest:
-#
-#   install  seeds    -- creates what is missing, moves nothing, overwrites
-#                        nothing. It can run unattended.
-#   sync     reconciles -- the ONLY place a file is moved or replaced, because
-#                        it is the only place a human is asked.
-#   git      decides  -- conflict resolution stays in git (diff, restore,
-#                        add), which the user already knows and which keeps a
-#                        history of every accepted change.
-#
-# Everything below prints before it acts, and refuses to act without a terminal.
+# install seeds, sync reconciles, git resolves — documented in docs/config-sync.md.
+# `sync` is the only layer that moves or replaces a file and the only one that asks.
 # ==============================================================================
 
-# config_reconcile_items — the registry records that need a decision, one per
-# line as "kind<TAB>src<TAB>dest". Read-only.
-#
-#   blocked-identical  a real file where a link belongs, byte-identical to the
-#                      repository copy: converting it loses nothing
-#   blocked-differs    a real file where a link belongs, content differs: the
-#                      user must choose
-#   missing            nothing there yet
+# config_reconcile_items — the registry records that need a decision, one per line
+# as "kind<TAB>src<TAB>dest". Read-only. blocked-identical: linking loses nothing;
+# blocked-differs: the user must choose; missing: nothing there yet.
 config_reconcile_items() {
     local src dest mode n health
     while IFS=$'\t' read -r src dest mode; do
         [[ -n "$dest" ]] || continue
         [[ "$(link_mode "$dest")" == "ignored" ]] && continue
-        # `seed` files are written once and then belong to the user. They are
-        # never linked, so there is nothing to reconcile: if the file exists the
-        # user owns it, and if it does not, `install` seeds it. Reporting a
-        # seeded file as a missing link would offer to replace the user's own
-        # work with a link to a template.
+        # A seed file is written once and then belongs to the user, so there is
+        # nothing to reconcile: reporting it as a missing link would offer to
+        # replace the user's own work with a link to a template.
         [[ "$mode" == "seed" ]] && continue
         n="$(link_resolve "$src" "$dest")"
         src="${n%%$'\t'*}"
@@ -174,9 +146,7 @@ config_reconcile_items() {
 }
 
 # config_backup <path> — a copy the user can recover from, under XDG state.
-# Delegates to backup_path, which keeps one directory per RUN and prunes old
-# runs, so a reconciliation touching several files stays recoverable as a unit
-# without the backup tree growing without limit.
+# backup_path keeps one directory per RUN and prunes old runs.
 config_backup() {
     local path="$1" dest
     dest="$(backup_path "$path")" || {
@@ -189,11 +159,9 @@ config_backup() {
     return 0
 }
 
-# config_adopt <path> — make a real file part of the repository.
-#
-# The file moves INTO the repository and a symlink takes its place, which is the
-# configuration-side equivalent of a git add: from then on it is tracked,
-# editable in either location, and synced to other machines.
+# config_adopt <path> — make a real file part of the repository: the file moves in
+# and a symlink takes its place, the configuration-side equivalent of a git add.
+# From then on it is tracked, editable in either location, and synced.
 config_adopt() {
     local path="$1" rel risk
     if [[ ! -f "$path" || -L "$path" ]]; then
@@ -313,9 +281,8 @@ config_sync() {
     local plan candidates orphans
     plan="$(config_reconcile_items)"
     candidates="$(scan_config_candidates)"
-    # Records whose source is gone: the file was renamed or deleted in the
-    # repository. They are not a link to repair, they are a link to remove, and
-    # without this the destination keeps a dangling symlink for good.
+    # Records whose source is gone: a link to remove, not to repair. Without this
+    # the destination keeps a dangling symlink for good.
     orphans="$(link_find_orphans || true)"
 
     local n_ident n_differ n_missing n_cand n_ignored n_orphan
@@ -355,15 +322,13 @@ config_sync() {
     # ---- 2. the decision, taken once, before anything is touched -----------
     printf '\n'
     if [[ "${ASSUME_YES:-0}" -eq 1 ]]; then
-        # --yes is the scripted path. It applies ONLY the changes that cannot
-        # lose data (linking an identical copy, creating a missing link);
-        # anything that needs a judgement call is still left for a human, so
-        # this flag can never overwrite a file the user edited.
+        # --yes is the scripted path and applies ONLY the changes that cannot lose
+        # data: linking an identical copy, creating a missing link. Anything needing
+        # a judgement call is still left for a human.
         log_info "Applying the safe changes (--yes); conflicts are still left alone."
     elif ! is_tty; then
-        # Fail CLOSED. Without a terminal there is nobody to ask, and every
-        # action below moves or replaces a file, so the safe answer is to do
-        # nothing and say exactly how to proceed by hand.
+        # Fail CLOSED: every action below moves or replaces a file, so with no
+        # terminal the answer is to change nothing and print the manual path.
         log_warn "No terminal: nothing was changed."
         log_info "Run this in an interactive shell, or apply individual decisions:"
         log_info "  ${SCRIPT_NAME:-manager.sh} config adopt <path>"
@@ -398,23 +363,24 @@ config_sync() {
         [[ -n "$kind" ]] || continue
         case "$kind" in
             blocked-identical)
-                # The repository copy is byte-identical, so replacing the file
-                # with a link loses nothing. Backed up anyway: "identical" is
-                # this scan's conclusion, and a backup costs nothing.
+                # Byte-identical, so linking loses nothing. Backed up anyway:
+                # "identical" is this scan's conclusion, and a backup costs nothing.
                 config_backup "$dest"
                 rm -f "$dest"
                 local rc=0
                 link_apply "$src" "$dest" "link" >/dev/null 2>&1 || rc=$?
-                [[ "$rc" == "$LINK_CREATED" ]] \
-                    && log_success "Linked (was an identical copy): ${dest#"$HOME"/}" \
-                    || log_warn "Could not link: ${dest#"$HOME"/}"
+                if [[ "$rc" == "$LINK_CREATED" ]]; then
+                    log_success "Linked (was an identical copy): ${dest#"$HOME"/}"
+                else
+                    log_warn "Could not link: ${dest#"$HOME"/}"
+                fi
                 ;;
             missing)
                 local rc2=0
                 link_apply "$src" "$dest" "$(link_mode "$dest")" >/dev/null 2>&1 || rc2=$?
-                [[ "$rc2" == "$LINK_CREATED" ]] \
-                    && log_success "Created: ${dest#"$HOME"/}" \
-                    || true
+                if [[ "$rc2" == "$LINK_CREATED" ]]; then
+                    log_success "Created: ${dest#"$HOME"/}"
+                fi
                 ;;
             blocked-differs)
                 log_warn "Left for you: ${dest#"$HOME"/} (content differs)"
@@ -425,10 +391,8 @@ config_sync() {
         esac
     done <<< "$plan"
 
-    # Orphaned records are removed as part of the same decision. link_prune_orphans
-    # only ever removes a destination that is still a symlink INTO this
-    # repository, so this cannot take away a real file, and a link whose source
-    # was deleted from the repository is broken either way.
+    # link_prune_orphans only ever removes a destination that is still a symlink
+    # INTO this repository, so this cannot take away a real file.
     if [[ "$n_orphan" -gt 0 ]]; then
         link_prune_orphans
     fi
@@ -498,12 +462,9 @@ cmd_config() {
     local sub="${1:-status}"
     [[ $# -gt 0 ]] && shift
 
-    # The registry is flag-dependent: hunk, lazygit and the skills bundle are
-    # entries only on a machine that opted into them, and install records that
-    # choice in the manifest. Every config subcommand therefore has to resolve
-    # the flags BEFORE it reads the registry, or a machine with the Git TUI stack
-    # installed is shown a registry that does not contain it — and the paths that
-    # need attention are exactly the ones that go missing.
+    # The registry depends on the feature flags — hunk, lazygit and the skills
+    # bundle are entries only on a machine that opted in — so resolve them BEFORE
+    # reading it, or that machine is shown a registry with its own paths missing.
     init_xdg_env >/dev/null
     manifest_init
     resolve_feature_flags

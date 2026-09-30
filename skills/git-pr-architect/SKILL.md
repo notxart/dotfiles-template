@@ -117,7 +117,9 @@ cat << 'EOF' > "${GIT_DIR}/AI_PR_BODY"
 EOF
 ```
 
-Use a **quoted** heredoc delimiter (`'EOF'`) so nothing inside is expanded.
+Use a **quoted** heredoc delimiter (`'EOF'`) so nothing inside is expanded. The
+file is per-worktree and untracked — like the commit draft, it is a hand-off
+buffer, not part of the branch.
 
 ### Step 4 — Hand off to the human
 

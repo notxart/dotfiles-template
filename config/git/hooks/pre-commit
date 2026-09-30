@@ -1,11 +1,9 @@
 #!/bin/sh
 # ==============================================================================
-# Global pre-commit Dispatcher
-# Path: ~/.config/git/hooks/pre-commit
-# Description: core.hooksPath redirects ALL hooks to this global directory,
-#              which would silently disable repository-local hooks. This
-#              dispatcher restores them: a repo hook stored as
-#              .git/hooks/pre-commit.local (executable) is chained transparently.
+# Global pre-commit dispatcher — ~/.config/git/hooks/pre-commit
+#
+# core.hooksPath redirects ALL hooks to this directory, which would silently disable
+# repository-local ones; this chains .git/hooks/pre-commit.local (executable) instead.
 # ==============================================================================
 
 HOOK_NAME="$(basename "$0")"

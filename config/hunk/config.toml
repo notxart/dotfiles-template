@@ -1,8 +1,5 @@
 # =============================================
-# Hunk Config
-# Path: ~/.config/hunk/config.toml
-# Part of the optional AI review toolchain
-# (installed via './manager.sh install --with-git-tui')
+# Hunk config (optional AI review toolchain: install --with-git-tui).
 # =============================================
 
 theme = "auto"

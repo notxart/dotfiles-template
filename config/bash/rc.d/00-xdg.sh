@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # This file sets up XDG Base Directory environment variables.
 # It should be sourced first to make these variables available to other scripts.
 
@@ -13,23 +14,19 @@ fi
 
 # Set GnuPG home to follow XDG spec
 export GNUPGHOME="${XDG_DATA_HOME}/gnupg"
-export GPG_TTY=$(tty)
+GPG_TTY="$(tty)"
+export GPG_TTY
 
 # Tell Git to use our XDG-compliant config file
 export GIT_CONFIG_GLOBAL="${XDG_CONFIG_HOME}/git/config.ini"
 
-# Where this dotfiles checkout lives. config/git/config.ini uses it to reach
-# config/git/wrap-msg.sh, which formats commit messages before the editor opens.
-#
-# readlink -f resolves this file's OWN path, which is reached through
-# ~/.config/bash -> <repo>/config/bash, so the value is this repository's real
-# location rather than the $HOME path the symlink was entered through. That is
-# what makes the absolute path in config.ini portable: each clone exports its
-# own location instead of the path being hardcoded.
+# Where this checkout lives, so config.ini can reach config/git/wrap-msg.sh. readlink -f
+# resolves this file's OWN path — it is reached through ~/.config/bash -> <repo>/config/bash
+# — so the value is this clone's real location rather than a hardcoded one, which is what
+# makes the absolute path in config.ini portable across machines.
 DSH_DOTFILES_DIR="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)"
 if [[ -n "$DSH_DOTFILES_DIR" ]]; then
-    # <repo>/config/bash/rc.d/00-xdg.sh -> <repo>: four levels up (the file
-    # itself, rc.d, bash, config).
+    # <repo>/config/bash/rc.d/00-xdg.sh -> <repo>: four levels up.
     DSH_DOTFILES_DIR="$(dirname "$(dirname "$(dirname "$(dirname "$DSH_DOTFILES_DIR")")")")"
     export DSH_DOTFILES_DIR
 else

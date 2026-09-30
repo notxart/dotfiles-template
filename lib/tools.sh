@@ -3,9 +3,8 @@
 # ==============================================================================
 # lib/tools.sh — Tool provisioning, version enforcement and per-tool fallbacks
 #
-# Moved verbatim from the original single-file installer (Step 1: unchanged).
-# hunk, pnpm, lazygit and the node floor were reworked in Step 8.
-
+# Each tool has a version floor. A package manager that cannot meet it falls
+# through to that tool's own installer.
 # ==============================================================================
 
 ensure_tool_version() {
@@ -18,7 +17,6 @@ ensure_tool_version() {
 
     log_step "Checking Requirement: $cmd (>= $req_ver)"
 
-    # Step 1: Check existing local binary
     if command_exists "$cmd"; then
         current_ver=$(get_installed_version "$cmd")
         if ! compare_versions_lt "$current_ver" "$req_ver"; then
@@ -28,7 +26,6 @@ ensure_tool_version() {
         log_warn "Local $cmd version ($current_ver) is outdated."
     fi
 
-    # Step 2: Check repository candidate
     log_info "Querying upstream candidate for '$pkg'..."
     candidate_ver=$(get_candidate_version "$pkg")
 
@@ -46,7 +43,6 @@ ensure_tool_version() {
         log_warn "Repository candidate (${candidate_ver:-none}) is insufficient or not available."
     fi
 
-    # Step 3: Trigger safe dynamic fallback
     log_info "Executing fallback installer: $fallback_fn"
     "$fallback_fn"
 }
@@ -131,9 +127,8 @@ install_hunk_fallback() {
         log_info "Symlinked $hunk_bin to ~/.local/bin/hunk"
     fi
     log_success "Hunk installed."
-    # Said out loud because it changes how this installation is maintained: a
-    # standalone hunk is not one of the installs `hunk update` recognises, so it
-    # will keep reporting itself as current while staying where it is.
+    # Said out loud because it changes maintenance: `hunk update` does not
+    # recognise a standalone install and keeps reporting itself as current.
     log_warn "This is a standalone install: 'hunk update' may not recognise it."
     log_info "Update it with '${SCRIPT_NAME:-manager.sh} update --only hunk', which re-runs this installer."
 }
@@ -152,11 +147,9 @@ install_lazygit_fallback() {
             ;;
     esac
 
-    # Asset names, measured against the v0.65.1 release: lazygit publishes
-    # exactly x86_64, arm64, armv6 and 32-bit builds for those systems, all
-    # lowercase. Two of these mappings are not guessable from `uname -m`: there
-    # is no armv7 build (the armv6 one runs on armv7 hardware), and 32-bit x86 is
-    # spelled `32-bit`, not `386`.
+    # Asset names measured against the v0.65.1 release, all lowercase. Two are
+    # not guessable from `uname -m`: there is no armv7 build (the armv6 one runs
+    # on armv7 hardware), and 32-bit x86 is spelled `32-bit`, not `386`.
     case "$(uname -m)" in
         x86_64|amd64)        arch="x86_64" ;;
         aarch64|arm64)       arch="arm64" ;;
@@ -174,10 +167,8 @@ install_lazygit_fallback() {
     local tmp_dir
     tmp_dir="$(create_temp_dir)"
 
-    # gh first: it downloads by asset pattern through the user's existing GitHub
-    # login, so nothing here depends on the shape of the release JSON, and it
-    # carries no rate limit for the anonymous case. The API path below is the
-    # fallback for a machine without gh or without a login.
+    # gh first: no dependency on the release-JSON shape, no anonymous rate
+    # limit. The API path below covers a machine without gh or without a login.
     if command_exists gh && gh auth status >/dev/null 2>&1; then
         log_info "Downloading ${asset} with gh..."
         gh release download --repo jesseduffield/lazygit --pattern "$asset" \
@@ -231,18 +222,12 @@ install_pnpm() {
     install_pnpm_standalone
 }
 
-# install_pnpm_standalone — run the official installer, whether or not pnpm is
-# already present.
-#
-# `install` calls this only when pnpm is missing. `update` calls it as the
-# fallback when `pnpm self-update` fails, which is the case where re-running the
-# installer is the only way back to a working pnpm — so this cannot be folded
-# into install_pnpm, whose first act is to return early when pnpm exists.
+# install_pnpm_standalone — the official installer, whether or not pnpm exists.
+# `update` needs it as the fallback when `pnpm self-update` fails, which is the
+# case install_pnpm's early return would skip.
 install_pnpm_standalone() {
     # A bare major, not a full version: the installer resolves it through the
-    # `latest-<major>` dist-tag (falling back to `next-<major>` before a new
-    # major is promoted), so the pin follows the stable release line instead of
-    # freezing at whatever was current the day this was written.
+    # `latest-<major>` dist-tag, so the pin follows the stable release line.
     local pnpm_version="${PNPM_VERSION:-12}"
 
     local fake_home
@@ -288,9 +273,8 @@ install_dsh() {
         exit 1
     fi
 
-    # @latest, explicitly. Without a tag pnpm resolves the `latest` dist-tag
-    # anyway, but saying it means the command in the log is the same one `update`
-    # issues, so the two paths cannot drift apart.
+    # Explicit so the logged command matches the one `update` issues: the two
+    # paths cannot drift apart.
     if ! pnpm add -g @deepseek-ai/dsh@latest; then
         log_error "DeepSeek Harness global package installation failed."
         exit 1

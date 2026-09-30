@@ -120,6 +120,11 @@ The `git-pr-architect` skill drafts the description into `.git/AI_PR_BODY`
 `## Related Issues` — it never runs `gh pr create` itself; publishing is
 yours). Without an agent, use the same template manually.
 
+Write the body **unwrapped**: one paragraph per line, one bullet per line.
+GitHub reflows paragraphs when it renders them, so breaks you insert by hand
+buy nothing — and inside a table, a link or inline code they can break the
+rendering outright.
+
 ### 8. Merge with Squash and Merge
 
 The project leader (or you, on your own project) merges with **Squash and
@@ -152,13 +157,23 @@ Start again from step 2.
 
 **Q: Why do I get "Authentication failed" on push?**
 
-Password authentication was removed from GitHub in 2021. Use SSH or a
-fine-grained token:
+Password authentication was removed from GitHub in 2021. Use SSH, or let the
+GitHub CLI hold the credential:
 
 ```sh
-git remote set-url origin git@github.com:<user>/<repo>.git
-# or: git remote set-url origin https://<token>@github.com/<user>/<repo>.git
+git remote set-url origin git@github.com:<user>/<repo>.git   # SSH
+gh auth login                                                # HTTPS via the CLI
 ```
+
+Over HTTPS this repository's `config/git/config.ini` sets
+`credential.helper = !gh auth git-credential`, so git asks `gh` for the token it
+already keeps in your system keyring.
+
+> **Never put a token in the remote URL** (`https://<token>@github.com/...`).
+> Git stores that URL verbatim in `.git/config` — plaintext, outside everything
+> this repository protects, and easy to paste into a bug report. It also
+> overrides the credential helper above, so the token stops being the thing `gh`
+> manages. `gh auth login` exists to avoid exactly that.
 
 **Q: Why does `git commit` fail with "gpg: signing failed"?**
 
@@ -184,3 +199,9 @@ An agent following the `git-commit-architect` skill writes
 `.git/AI_COMMIT_MSG`; the global `prepare-commit-msg` hook injects it. If the
 file does not exist, the hook does nothing — the workflow is fully manual
 when no agent is involved.
+
+## Related
+
+- [git-guide.md](git-guide.md) — configuration, aliases and commit conventions.
+- [config-sync.md](config-sync.md) — how these files get onto a machine, and how
+  a machine and the repository are reconciled afterwards.

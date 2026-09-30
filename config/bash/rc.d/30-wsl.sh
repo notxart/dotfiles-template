@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # This file contains settings specific to the Windows Subsystem for Linux (WSL).
 
 # Only executed if the environment is confirmed as WSL

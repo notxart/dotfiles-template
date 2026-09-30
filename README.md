@@ -1,8 +1,25 @@
 # My Personal Dotfiles for Bash
 
-This repository serves as a robust, modular boilerplate for Bash configuration files, optimized for a modern development workflow. The setup is designed to be portable, maintainable, and strictly compliant with the XDG Base Directory Specification.
+This repository serves as a robust, modular boilerplate for a modern development
+workflow: bash configuration, hardened git configuration with GPG signing, an
+optional AI-assisted review toolchain, and a manager that installs and
+reconciles all of it. The setup is designed to be portable, maintainable, and
+strictly compliant with the XDG Base Directory Specification.
 
 ![Screenshot](https://i.postimg.cc/FzqLSLXP/Screenshot.png)
+
+## 📁 Repository layout
+
+| Path | What it is |
+| --- | --- |
+| `manager.sh` | The only entry point: `install`, `update`, `config`. |
+| `lib/` | The implementation, one module per concern: registry and links, scan, migration, packages, tools, update, config reconciliation. |
+| `config/` | The master copy of every managed file — bash, git ([config.ini](config/git/config.ini) + global hooks), vim, starship, and the optional hunk/lazygit configs. |
+| `skills/` | Agent skills. **The canonical location**; `$DSH_HOME/skills/` holds links to these files. |
+| `docs/` | [git-guide.md](docs/git-guide.md), [github-flow.md](docs/github-flow.md), [config-sync.md](docs/config-sync.md). |
+| `check.sh` | The acceptance matrix — see [Verifying the manager itself](#verifying-the-manager-itself). |
+| `AGENTS.md` | The rules an AI agent working here loads automatically. |
+| `$XDG_STATE_HOME/dotfiles/` | The manifest and the backups. Written on your machine, never in this repository. |
 
 ## ✨ Features
 
@@ -156,7 +173,12 @@ are stubs that record what they were asked to do instead of doing it.
 ```sh
 ./check.sh            # the acceptance matrix; exits non-zero on failure
 ./check.sh --report   # one install, then a report to read; exits 0
+./check.sh --lint     # shellcheck over the source tree (needs shellcheck)
 ```
+
+`--lint` is opt-in on purpose: shellcheck is a contributor tool, not something
+this project needs, so a host that has never installed it still runs the matrix.
+It prints the shellcheck version and exits non-zero on any finding.
 
 `--report` is for looking: it leaves `report.txt` holding the resulting links, the
 entries directly under `~/.config`, the skill destinations, any symlink left
@@ -227,6 +249,13 @@ See [docs/git-guide.md](docs/git-guide.md) (configuration reference) and
 [docs/github-flow.md](docs/github-flow.md) (step-by-step workflow, including
 the AI-assisted HITL flow).
 
+**Write messages unwrapped.** One paragraph per line, one bullet per line — no
+line breaks of your own, as an author or as an agent. The tooling decides where
+the breaks go, and it is idempotent, so a break you insert by hand is not undone:
+it is kept and re-wrapped around. `./check.sh` asserts that the hook and
+`core.editor` produce byte-identical output, that the formatter is idempotent,
+and that a message it rejects is still left intact.
+
 ### DeepSeek Harness home
 
 The dotfiles relocate DSH's config root from `~/.dsh` to `$DSH_HOME`
@@ -263,13 +292,19 @@ Since you have cloned your own repository, you can now track changes to your con
 
 ```sh
 cd ~/dotfiles
-git add .
-
-# Replace `<COMMIT_MSG>` with your actual commit message, e.g., "feat: added new alias for kubectl"
-git commit -m <COMMIT_MSG>
-
+git add -p            # stage hunks selectively (alias: git ap)
+git commit            # opens the editor: formats the message, injects any AI draft
 git push
 ```
+
+Stage **by name** (`git add <path>`, or `git add -p`), never `git add .`: this
+repository's whole job is deciding what is tracked, and a blanket add is how a
+`.local` file, a state cache or a secret gets committed. `git commit -m "..."`
+skips both the formatter and the AI draft — it is fine for a one-line message
+you have already kept under 50 characters, but plain `git commit` is the path
+that formats. Automation should stay on `-m`: with no terminal and no editor
+configured, the formatter refuses rather than starting an editor that would
+block.
 
 A configuration file that lives on the machine rather than in the repository can
 be brought under version control without moving it by hand:
