@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # This file is for setting general environment variables.
 
 # Set the default editor
@@ -28,7 +29,7 @@ export LESS_TERMCAP_ue=$'\e[0m'        # Ends underline
 export LESS_TERMCAP_us=$'\e[1;32m'     # Begins underline
 
 # pnpm global directory (Node.js-free standalone binary; installed by
-# install.sh into $XDG_DATA_HOME/pnpm). pnpm 12 keeps its binaries under
+# 'manager.sh install' into $XDG_DATA_HOME/pnpm). pnpm 12 keeps its binaries
 # $PNPM_HOME/bin (pnpm itself, node/npm provisioned via `pnpm runtime`,
 # and all globally installed CLIs). See https://pnpm.io/installation.
 export PNPM_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/pnpm"

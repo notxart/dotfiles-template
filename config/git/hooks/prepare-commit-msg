@@ -1,22 +1,9 @@
 #!/bin/sh
 # ==============================================================================
-# Global prepare-commit-msg Hook
-# Path: ~/.config/git/hooks/prepare-commit-msg
-# Description: Injects an AI-generated commit message draft
-#              (.git/AI_COMMIT_MSG, written by an AI agent working in
-#              draft-only mode) into the commit editor buffer, then chains
-#              the repository-local hook at .git/hooks/prepare-commit-msg.local
-#              if present.
+# Global prepare-commit-msg hook — ~/.config/git/hooks/prepare-commit-msg
 #
-# Behavior:
-#   - Injection happens ONLY for plain `git commit` (no -m/-t/-F source,
-#     no merge/amend): a human still reviews and edits the message in $EDITOR.
-#   - The draft buffer is NOT deleted here: it survives an editor abort / GPG
-#     signing failure, and is removed by the global post-commit dispatcher
-#     after a successful commit (any source, incl. -m/amend - which also
-#     prevents stale drafts from leaking into later commits).
-#   - Per-worktree safe: $(git rev-parse --git-dir) resolves to the worktree's
-#     own gitdir, so each worktree has an independent AI_COMMIT_MSG buffer.
+# Injects the AI draft (.git/AI_COMMIT_MSG) into a plain `git commit` buffer, then chains
+# the .local hook; core.editor carries the other wrapping rules (./check.sh compares).
 # ==============================================================================
 set -e
 
@@ -28,15 +15,49 @@ GIT_DIR="$(git rev-parse --git-dir)"
 AI_MSG_FILE="${GIT_DIR}/AI_COMMIT_MSG"
 
 # Inject the AI draft only for plain `git commit` (empty source).
-# The draft is wrapped to <= 72 columns AT INJECTION (fold -s -w 72:
-# word-boundary, line-by-line, bullets/structure preserved), so the editor
-# always opens a wrapped draft regardless of the user's vim/editor config.
-# The vimrc BufWritePre rewrap remains as a second line of defense for
-# hand edits made during review.
 if [ -z "$COMMIT_SOURCE" ] && [ -f "$AI_MSG_FILE" ] && [ -s "$AI_MSG_FILE" ]; then
     TEMP_FILE="$(mktemp)"
 
-    fold -s -w 72 "$AI_MSG_FILE" > "$TEMP_FILE"
+    # Rules are INLINED, not sourced: this hook is reached through the ~/.config/git
+    # symlink, so locating a sibling file is unreliable — a fallback once dropped the
+    # continuation indent of every wrapped bullet. Same program as core.editor's.
+    awk '
+    function wrap(prefix, cont, text,    out, line, word, sep, i, n, w) {
+        n = split(text, w, /[ \t]+/)
+        out = ""
+        line = prefix
+        for (i = 1; i <= n; i++) {
+            word = w[i]
+            if (word == "") continue
+            sep = (line == prefix) ? "" : " "
+            if (length(line) + length(sep) + length(word) > 72 && line != prefix) {
+                out = out line "\n"
+                line = cont word
+            } else {
+                line = line sep word
+            }
+        }
+        return out line
+    }
+    NR == 1 { sub(/[ \t]+$/, ""); print; next }
+    {
+        line = $0
+        sub(/[ \t]+$/, "", line)
+        if (line == "") { print ""; next }
+        if (line ~ /^(Refs|Closes|Fixes|Co-authored-by|Signed-off-by|Reviewed-by|Acked-by|Tested-by|Reported-by):/) {
+            print line
+            next
+        }
+        # An INDENTED line is a continuation of the item above, which is what this
+        # formatter produces for a broken bullet. Keeping the indent is what makes a
+        # second pass a no-op — the real commit path runs these rules twice (this hook,
+        # then core.editor) — and the two copies must stay identical.
+        if (line ~ /^[ \t]/) { print wrap("  ", "  ", line); next }
+        if (line ~ /^- /) { print wrap("- ", "  ", substr(line, 3)); next }
+        print wrap("", "", line)
+    }
+    ' "$AI_MSG_FILE" > "$TEMP_FILE"
+
     printf '\n' >> "$TEMP_FILE"
     cat "$COMMIT_MSG_FILE" >> "$TEMP_FILE"
 

@@ -14,8 +14,13 @@ cryptographic signing to keep the repository maintainable and bisect-friendly.
   Generate a key (`gpg --full-generate-key`) and put its fingerprint into
   `config/git/config.ini` (`[user] signingkey`) **before** your first commit;
   the template's placeholder key will fail otherwise.
-- **Vim >= 9.0** (optional but recommended) — `~/.config/vim/vimrc` wraps
-  commit messages at 72 columns via the `gitcommit` filetype.
+- **Matching XDG paths** — `./manager.sh install` refuses to start when the paths
+  the manager derives and the paths `config/bash/rc.d/*.sh` export disagree, so a
+  half-installed machine cannot come out of a config edit. See
+  [The XDG preflight](config-sync.md#the-xdg-preflight-why-install-can-refuse-to-start).
+- **Vim >= 9.0** (optional but recommended) — `config/vim/vimrc` marks the column
+  limit and runs the repository's formatter on save for the `gitcommit` filetype.
+  The formatting itself does not depend on Vim; see "Wrapping" below.
 
 ## 1. Core Principles
 
@@ -29,9 +34,8 @@ cryptographic signing to keep the repository maintainable and bisect-friendly.
 
 The project includes a hardened `config/git/config.ini`. Key features:
 
-- **Never auto-execute typos**: `help.autocorrect = prompt` (Git >= 2.34)
-  requires explicit confirmation before running a corrected command. The old
-  `10` (1-second auto-execute) is dangerous for destructive commands.
+- **Never auto-execute typos**: `help.autocorrect = prompt` (Git >= 2.34) asks
+  before running a corrected command instead of running it after a delay.
 - **Global hooks path**: `core.hooksPath = ~/.config/git/hooks` — see the
   [Global Hooks](#3-global-hooks) section. Note that with `hooksPath` set,
   per-repo `.git/hooks/` are ignored; the shipped dispatchers re-enable them.
@@ -66,6 +70,12 @@ The project includes a hardened `config/git/config.ini`. Key features:
   that chain `.git/hooks/<hook>.local`. Without a `.local` hook they are
   inert, so existing per-repo hooks keep working under the global `hooksPath`.
 
+The hook and `core.editor` apply the same wrapping rules to the same message, so
+a commit that opens an editor is formatted once on the way in and again on save
+**without changing the result**: the rules are idempotent, and `./check.sh`
+asserts both that and the fact that the two copies of those rules agree byte for
+byte.
+
 All hooks are inert by default; the AI draft flow only activates when an agent
 writes `.git/AI_COMMIT_MSG` (see the `git-commit-architect` skill).
 
@@ -80,7 +90,7 @@ writes `.git/AI_COMMIT_MSG` (see the `git-commit-architect` skill).
 
 - `git ds`: diff of staged changes. `git dw`: whitespace-insensitive diff.
 - `git hdiff`: diff through the Hunk pager (requires `hunk`, installed with
-  `./install.sh --with-git-tui`); falls back to a plain `git diff` when
+  `./manager.sh install --with-git-tui`); falls back to a plain `git diff` when
   `hunk` is missing, so the alias never hard-errors.
 
 ### Rebase & Sync
@@ -128,21 +138,62 @@ specification.
 - `docs`: documentation only changes
 - `perf`: a code change that improves performance
 - `chore`: changes to the build process or auxiliary tools
+- `test`: adding or correcting tests
 
 ### Wrapping
 
-Do **not** hand-wrap commit message lines: the editor wraps at 72 columns
-automatically (Vim `gitcommit` filetype, see `config/vim/vimrc`). Keep the
-subject under 50 characters and the body under ~72 characters per line as a
-soft habit.
+**Write the message unwrapped.** One paragraph on one line, one bullet on one
+line, no line breaks you inserted yourself. Formatting is deterministic tooling's
+job, and it happens without anyone remembering to do it:
+
+- `config/git/wrap-msg.sh` is set as `core.editor`, so it formats the message file
+  before the real editor opens. This is the only mechanism that covers
+  `git commit --amend` and `git rebase -i`, because neither runs
+  `prepare-commit-msg`. It never splits a word and never leaves trailing
+  whitespace.
+- The `prepare-commit-msg` hook formats the injected AI draft with **the same
+  rules**, so the buffer is already correct when the editor opens.
+- `config/vim/vimrc` runs that same script on save, which catches anything typed
+  during the session. There is exactly one implementation of these rules.
+
+Hand-wrapping does not merely duplicate that work — it survives it. The
+formatter treats each line as its own paragraph, so a paragraph you already broke
+at 77 columns comes back as `... before falling` / `back` / `to manual builds`:
+an orphaned word where your break happened to land. Write the paragraph on one
+line and let the tooling choose the breaks.
+
+The one thing the tooling will not fix is the subject. It is never wrapped —
+only the author knows what to cut — so keep it **under 50 characters** yourself;
+the formatter reports an over-long subject and leaves it alone. `./check.sh`
+asserts that a rejected subject still leaves the whole message intact.
+
+Validate without opening an editor:
+
+```sh
+config/git/wrap-msg.sh --check < msg.txt
+```
+
+It exits non-zero and names the problem (empty subject, subject over 50
+characters, a formatted line over 72, trailing whitespace), and writes the
+formatted message to stdout in either case.
+
+Automation should commit with `-m`: a plain `git commit` needs an editor, and
+with no terminal and no editor configured `config/git/wrap-msg.sh` **refuses**
+rather than starting one it cannot show — an editor started without a terminal
+blocks until it is killed. The refusal is deliberate, and `./check.sh` asserts
+that no editor is ever launched in that situation. `-m` is safe but skips the
+formatter and the AI draft, so keep such a message inside 50 characters by hand.
 
 ### Example
 
-```txt
-feat(install): enforce minimum tool versions via hybrid installation strategy
+This is a draft as an author should write it — every paragraph and every bullet
+on a single line. Notice that the prose of this document is wrapped to be read;
+a **message** is not: its line breaks are produced by the tooling.
 
-The installer now checks installed and candidate versions before falling back
-to manual builds, preventing silent toolchain downgrades.
+```txt
+feat(install): enforce minimum tool versions
+
+The installer now checks installed and candidate versions before falling back to manual builds, preventing silent toolchain downgrades. The check runs before any install, so a machine can no longer be silently downgraded by a stale repository candidate.
 
 Key Changes:
 - Version sorter with GNU sort fallback (gsort on macOS)
@@ -151,6 +202,9 @@ Key Changes:
 Verification:
 - Tested against apt and brew environments
 ```
+
+After `git commit` opens the editor, that same draft is already wrapped at 72
+columns, with the bullets' continuation lines indented by two spaces.
 
 ## 7. The Workflow
 
@@ -166,4 +220,6 @@ Verification:
    `gh pr merge --squash --delete-branch` or `git bclean` where applicable.
 
 See [github-flow.md](github-flow.md) for the full step-by-step guide,
-including the AI-assisted Human-in-the-Loop flow.
+including the AI-assisted Human-in-the-Loop flow, and
+[config-sync.md](config-sync.md) for how these files get onto a machine —
+seeding, linking, `config sync`, and the backups taken along the way.

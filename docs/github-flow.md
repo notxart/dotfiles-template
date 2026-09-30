@@ -8,7 +8,7 @@ prepare commit drafts that you — and only you — review and sign.
 
 > **Prerequisites**: Git >= 2.37, a GPG key configured in
 > `config/git/config.ini`, and this repo's dotfiles installed. The AI parts
-> are optional (`./install.sh --with-git-tui --with-dsh`).
+> are optional (`./manager.sh install --with-git-tui --with-dsh`).
 
 ## Principles
 
@@ -65,12 +65,20 @@ git add -p          # stage hunks selectively (alias: git ap)
 git commit          # alias: git ci
 ```
 
-For a plain `git commit`, the `prepare-commit-msg` hook injects the agent's
-draft into your editor automatically (zero copy-paste) — already wrapped at
-72 columns at injection, independent of your editor. Review and edit it —
-Vim additionally rewraps long lines **on save** (vimrc `BufWritePre`, a
-second line of defense for your hand edits) — save (`:wq`), and enter your
-GPG passphrase in the pinentry prompt. The AI never sees your key.
+For a plain `git commit`, `core.editor` formats the message file and the
+`prepare-commit-msg` hook injects the agent's draft into it (zero copy-paste) —
+so what you see in the editor is already wrapped at 72 columns, with an
+over-long subject reported rather than silently cut. Review and edit it, save
+(`:wq`), and enter your GPG passphrase in the pinentry prompt. The AI never sees
+your key.
+
+Edit it however you like, but **do not re-wrap it by hand** and do not ask an
+agent to: the rules are idempotent, so a manual break is not undone, it is kept
+and re-wrapped around — a paragraph you broke at 77 columns comes back with an
+orphaned word on the next line. Write one paragraph per line and let the tooling
+decide where the breaks go. Saving in Vim applies the same script a second time
+for anything you typed, which is why an edit cannot leave the message in a shape
+the repository does not use.
 
 > The hook does **not** inject into `git commit -m "..."`: a hand-written
 > message always wins.
@@ -112,6 +120,11 @@ The `git-pr-architect` skill drafts the description into `.git/AI_PR_BODY`
 `## Related Issues` — it never runs `gh pr create` itself; publishing is
 yours). Without an agent, use the same template manually.
 
+Write the body **unwrapped**: one paragraph per line, one bullet per line.
+GitHub reflows paragraphs when it renders them, so breaks you insert by hand
+buy nothing — and inside a table, a link or inline code they can break the
+rendering outright.
+
 ### 8. Merge with Squash and Merge
 
 The project leader (or you, on your own project) merges with **Squash and
@@ -144,13 +157,23 @@ Start again from step 2.
 
 **Q: Why do I get "Authentication failed" on push?**
 
-Password authentication was removed from GitHub in 2021. Use SSH or a
-fine-grained token:
+Password authentication was removed from GitHub in 2021. Use SSH, or let the
+GitHub CLI hold the credential:
 
 ```sh
-git remote set-url origin git@github.com:<user>/<repo>.git
-# or: git remote set-url origin https://<token>@github.com/<user>/<repo>.git
+git remote set-url origin git@github.com:<user>/<repo>.git   # SSH
+gh auth login                                                # HTTPS via the CLI
 ```
+
+Over HTTPS this repository's `config/git/config.ini` sets
+`credential.helper = !gh auth git-credential`, so git asks `gh` for the token it
+already keeps in your system keyring.
+
+> **Never put a token in the remote URL** (`https://<token>@github.com/...`).
+> Git stores that URL verbatim in `.git/config` — plaintext, outside everything
+> this repository protects, and easy to paste into a bug report. It also
+> overrides the credential helper above, so the token stops being the thing `gh`
+> manages. `gh auth login` exists to avoid exactly that.
 
 **Q: Why does `git commit` fail with "gpg: signing failed"?**
 
@@ -176,3 +199,9 @@ An agent following the `git-commit-architect` skill writes
 `.git/AI_COMMIT_MSG`; the global `prepare-commit-msg` hook injects it. If the
 file does not exist, the hook does nothing — the workflow is fully manual
 when no agent is involved.
+
+## Related
+
+- [git-guide.md](git-guide.md) — configuration, aliases and commit conventions.
+- [config-sync.md](config-sync.md) — how these files get onto a machine, and how
+  a machine and the repository are reconciled afterwards.

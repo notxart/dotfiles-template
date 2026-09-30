@@ -1,0 +1,26 @@
+# ---------------------------------------------------------------------------
+# Throwaway runs produced by check.sh (repository root).
+#
+# ./check.sh runs the manager against a fake HOME to prove it never touches the
+# real configuration; ./check.sh --report additionally leaves that run behind
+# for inspection (report.txt, stdout.clean, stderr.clean). Both write here, and
+# none of it is ever committed.
+# ---------------------------------------------------------------------------
+.sandbox-e2e/
+
+# ---------------------------------------------------------------------------
+# App-generated MACHINE STATE — must never be committed.
+# These files record this machine's sessions and absolute paths; syncing them
+# to another computer breaks (or leaks) rather than helps.
+#
+# NOTE: identity files are intentionally NOT ignored. This repository IS the
+# sync mechanism for user config (see README "Privacy"), so
+# config/git/config.ini and config/git/work.ini stay tracked by design.
+# ---------------------------------------------------------------------------
+**/state.json
+**/session*
+**/*.sock
+**/*.pid
+**/*.lock
+**/*.log
+.DS_Store

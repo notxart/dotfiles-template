@@ -1,20 +1,13 @@
-# This file handles shell completions.
-#
-# STRATEGY:
-# 1. Static Completions (Preferred): Generate once, save to file. Fast startup.
-# 2. Dynamic Completions (Fallback): Eval on startup. Slow startup.
+# shellcheck shell=bash
+# Shell completions. Static first (generated once into $XDG_DATA_HOME, fast startup),
+# dynamic eval only as a fallback (slow startup).
 
 # Ensure the custom completions directory exists.
 COMPLETIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
 mkdir -p "$COMPLETIONS_DIR"
 
-# HELPER FUNCTION: generate_completion_if_missing
-# Description: Generates a completion file only if the command exists and
-#              the completion file is missing.
-# Arguments:
-#   $1: Command name (e.g., "rustup")
-#   $2: Generation command (e.g., "rustup completions bash")
-#   $3: (Optional) Output filename (defaults to $1)
+# generate_completion_if_missing <cmd> <generation-command> [filename]
+# Writes the file only when the command exists and the file is missing.
 generate_completion_if_missing() {
     local cmd_name="$1"
     local gen_cmd="$2"
@@ -46,7 +39,7 @@ generate_completion_if_missing() {
 
 # --- Static Completions (Generated Once) ---
 
-# pnpm (Node.js-free standalone install; see install.sh)
+# pnpm (Node.js-free standalone install; see 'manager.sh install')
 generate_completion_if_missing "pnpm" "pnpm completion bash"
 
 # Example: Rust Toolchain

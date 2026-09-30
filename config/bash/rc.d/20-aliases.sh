@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # This file contains shell aliases for convenience.
 
 # General alias

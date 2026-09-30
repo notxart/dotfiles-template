@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Configuration for shell plugins.
 
 # --- Starship ---
